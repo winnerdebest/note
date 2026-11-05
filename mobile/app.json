@@ -1,0 +1,44 @@
+{
+  "expo": {
+    "name": "Mindful Canva",
+    "slug": "mindful-canvas-app",
+    "version": "1.0.0",
+    "scheme": "mindfulcanvas",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.datpocketguy.mindfulcanvasapp"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sqlite",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-router"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "bf35edcb-6fe3-422d-a328-63934038e68e"
+      }
+    }
+  }
+}

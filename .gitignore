@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Next.js
+web/.next/
+web/out/
+.next/
+out/
+
+# Production
+build/
+dist/
+
+# Expo & Mobile
+mobile/.expo/
+.expo/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Environment variables
+.env
+.env*.local
+*.env
+**/.env
+**/.env*.local
+
+# Python / FastAPI
+backend/__pycache__/
+**/__pycache__/
+backend/.pytest_cache/
+backend/venv/
+backend/.venv/
+venv/
+.venv/
+**/venv/
+**/.venv/
+*.pyc
+*.pyo
+*.pyd
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Misc
+.DS_Store
+*.pem
+Thumbs.db
+firebase-debug.log*
