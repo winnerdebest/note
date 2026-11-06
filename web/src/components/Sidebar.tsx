@@ -1,7 +1,21 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Plus, Settings, Search, Trash2, RotateCcw, X, ChevronDown, ChevronRight, FileText } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  Plus,
+  Settings,
+  Search,
+  Trash2,
+  RotateCcw,
+  X,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Pin,
+  Cloud,
+  Feather,
+} from 'lucide-react';
 
 interface Note {
   id?: string;
@@ -42,12 +56,32 @@ const Sidebar: React.FC<SidebarProps> = ({
   onTagChange,
   allTags,
 }) => {
+  const router = useRouter();
   const [showTrash, setShowTrash] = useState(false);
-  const [showTagFilter, setShowTagFilter] = useState(false);
+  const [filterMode, setFilterMode] = useState<'all' | 'pinned'>('all');
+
+  const pinnedCount = useMemo(
+    () => notes.filter((n) => n.isPinned).length,
+    [notes]
+  );
+
+  const displayedNotes = useMemo(() => {
+    if (filterMode === 'pinned') {
+      return notes.filter((n) => n.isPinned);
+    }
+    return notes;
+  }, [notes, filterMode]);
 
   const getPreview = (content: string) => {
-    if (!content) return 'Empty note';
-    return content.replace(/[#*_~`>\-\[\]]/g, '').slice(0, 55) + (content.length > 55 ? '…' : '');
+    if (!content) return 'Empty note…';
+    const cleaned = content
+      .replace(/^#+\s+/gm, '')
+      .replace(/^\s*[-*]\s+\[[ xX]\]\s+/gm, '✓ ')
+      .replace(/[#*_~`>\-\[\]]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleaned) return 'Empty note…';
+    return cleaned.slice(0, 65) + (cleaned.length > 65 ? '…' : '');
   };
 
   const formatDate = (dateStr: string) => {
@@ -66,181 +100,272 @@ const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside className="w-full md:w-[320px] h-full bg-surface-low flex flex-col text-on-surface-variant overflow-hidden">
-      {/* Header */}
-      <div className="p-4 pb-3">
-        <div className="flex items-center justify-between mb-4">
-          <h1 className="font-inter font-bold text-lg text-on-surface tracking-tight">Notes</h1>
+    <aside className="w-full md:w-[300px] h-full bg-surface-low flex flex-col text-on-surface-variant overflow-hidden select-none">
+      {/* Top Workspace Header */}
+      <div className="p-3.5 pb-2.5">
+        <div className="flex items-center justify-between mb-3 px-0.5">
+          <div className="flex items-center gap-2">
+            <div className="flex size-6 md:size-5 items-center justify-center rounded-md md:rounded bg-on-surface text-surface">
+              <Feather size={12} className="md:hidden" />
+              <FileText size={11} className="hidden md:block" />
+            </div>
+            <h1 className="text-sm md:text-xs font-semibold tracking-tight text-on-surface">
+              <span className="md:hidden">
+                Notes <span className="font-normal text-on-surface-variant text-xs">by Winner</span>
+              </span>
+              <span className="hidden md:inline">All Notes</span>
+            </h1>
+            <span className="rounded-full bg-surface-high/70 px-1.5 py-0.5 font-mono text-[10px] text-on-surface-variant">
+              {notes.length}
+            </span>
+          </div>
+
           <button
+            type="button"
             onClick={onNewNote}
-            className="icon-btn !w-auto px-3 gap-1.5 text-primary font-semibold text-xs"
+            className="inline-flex items-center gap-1 rounded-lg md:rounded-md border border-outline-variant bg-surface-lowest px-2.5 py-1.5 md:py-1 text-xs md:text-[11px] font-medium text-on-surface shadow-2xs hover:bg-surface-container active:scale-97 transition-all cursor-pointer"
           >
-            <Plus size={16} strokeWidth={2.5} />
-            <span className="hidden sm:inline">New</span>
+            <Plus size={13} strokeWidth={2.2} />
+            <span>New</span>
           </button>
         </div>
 
-        {/* Search */}
-        <div className="relative" id="search-container">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/40" />
+        {/* Search Input with ⌘K badge */}
+        <div className="relative mb-3" id="search-container">
+          <Search
+            size={13}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/60 pointer-events-none"
+          />
           <input
             type="text"
-            placeholder="Search notes..."
+            placeholder="Search notes or #tags…"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full pl-9 pr-8 py-2 bg-surface-container/60 rounded-lg text-[0.8125rem] text-on-surface placeholder:text-on-surface-variant/35 outline-none focus:bg-surface-container focus:ring-2 focus:ring-primary/20 transition-all border border-transparent focus:border-primary/20"
+            className="w-full h-9 md:h-8 pl-8 pr-9 md:pr-11 bg-surface-lowest rounded-lg text-base sm:text-xs text-on-surface placeholder:text-on-surface-variant/50 outline-none border border-outline-variant focus:border-on-surface transition-colors"
             id="search-input"
           />
-          {searchQuery && (
+          {searchQuery ? (
             <button
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded-full hover:bg-surface-high text-on-surface-variant/50"
+              type="button"
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-surface-container text-on-surface-variant cursor-pointer"
               onClick={() => onSearchChange('')}
             >
               <X size={13} />
             </button>
+          ) : (
+            <kbd className="hidden sm:inline-block pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-outline-variant bg-surface-low px-1 py-0.5 font-mono text-[10px] text-on-surface-variant/60">
+              ⌘K
+            </kbd>
           )}
         </div>
-      </div>
 
-      {/* Tag Filter */}
-      {allTags && allTags.length > 0 && (
-        <div className="px-4 pb-2">
+        {/* All / Pinned Filter Pills */}
+        <div className="flex items-center gap-1 px-0.5">
           <button
-            className="flex items-center gap-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-on-surface-variant/50 hover:text-on-surface-variant transition-colors mb-1.5"
-            onClick={() => setShowTagFilter(!showTagFilter)}
+            type="button"
+            onClick={() => setFilterMode('all')}
+            className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+              filterMode === 'all' && !activeTag
+                ? 'bg-on-surface text-surface'
+                : 'text-on-surface-variant hover:bg-surface-high/60 hover:text-on-surface'
+            }`}
           >
-            {showTagFilter ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            Tags
+            All ({notes.length})
           </button>
-          {showTagFilter && (
-            <div className="flex flex-wrap gap-1.5 pb-1">
+          <button
+            type="button"
+            onClick={() => setFilterMode('pinned')}
+            className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+              filterMode === 'pinned'
+                ? 'bg-on-surface text-surface'
+                : 'text-on-surface-variant hover:bg-surface-high/60 hover:text-on-surface'
+            }`}
+          >
+            Pinned ({pinnedCount})
+          </button>
+        </div>
+
+        {/* Tag Filter Row */}
+        {allTags && allTags.length > 0 && (
+          <div className="mt-2.5 flex items-center gap-1 overflow-x-auto pb-1 no-scrollbar">
+            {activeTag && (
               <button
-                className={`tag-pill cursor-pointer text-[0.625rem] ${!activeTag ? '' : 'opacity-40 hover:opacity-70'}`}
+                type="button"
                 onClick={() => onTagChange('')}
+                className="shrink-0 rounded-md border border-outline-variant bg-surface-lowest px-1.5 py-0.5 font-mono text-[10px] text-on-surface-variant hover:text-on-surface cursor-pointer"
               >
-                All
+                Clear
               </button>
-              {allTags.map((tag) => (
+            )}
+            {allTags.map((tag) => {
+              const isTagActive = activeTag === tag;
+              return (
                 <button
                   key={tag}
-                  className={`tag-pill cursor-pointer text-[0.625rem] ${activeTag === tag ? '' : 'opacity-40 hover:opacity-70'}`}
-                  onClick={() => onTagChange(activeTag === tag ? '' : tag)}
+                  type="button"
+                  onClick={() => onTagChange(isTagActive ? '' : tag)}
+                  className={`shrink-0 rounded-md px-2 py-0.5 font-mono text-[10px] transition-colors cursor-pointer border ${
+                    isTagActive
+                      ? 'border-on-surface bg-on-surface text-surface font-medium'
+                      : 'border-outline-variant bg-surface-lowest text-on-surface-variant hover:border-on-surface/40 hover:text-on-surface'
+                  }`}
                 >
-                  {tag}
+                  #{tag}
                 </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+              );
+            })}
+          </div>
+        )}
+      </div>
 
-      {/* Notes List */}
-      <div className="flex-1 overflow-y-auto px-3 pb-3">
-        {notes.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <div className="w-12 h-12 rounded-xl bg-surface-container flex items-center justify-center mb-3">
-              <FileText size={22} className="text-on-surface-variant/30" />
+      {/* Notes Feed */}
+      <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1.5">
+        {displayedNotes.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-14 px-4 text-center">
+            <div className="w-10 h-10 rounded-xl border border-outline-variant bg-surface-lowest flex items-center justify-center mb-3">
+              <FileText size={18} className="text-on-surface-variant/40" />
             </div>
-            <p className="text-sm text-on-surface-variant/50 font-medium">
-              {searchQuery ? 'No notes found' : 'No notes yet'}
+            <p className="text-xs text-on-surface font-medium">
+              {searchQuery
+                ? 'No matching notes'
+                : filterMode === 'pinned'
+                ? 'No pinned notes yet'
+                : 'Your notebook is empty'}
             </p>
-            <p className="text-xs text-on-surface-variant/30 mt-1">
-              {searchQuery ? 'Try a different search' : 'Tap + to create one'}
+            <p className="text-[11px] text-on-surface-variant/60 mt-1">
+              {searchQuery
+                ? 'Try a different keyword or tag'
+                : filterMode === 'pinned'
+                ? 'Pin important notes for quick access'
+                : 'Click + New to write your first note'}
             </p>
           </div>
         )}
 
-        <div className="flex flex-col gap-0.5">
-          {notes.map((note, index) => (
-            <div
+        {displayedNotes.map((note) => {
+          const isSelected = activeNoteId === note.id;
+          return (
+            <button
               key={note.id}
-              className={`note-card ${activeNoteId === note.id ? 'note-card-active' : ''}`}
+              type="button"
               onClick={() => onSelectNote(note.id!)}
-              style={{ animation: `slide-up 0.2s ease ${index * 0.03}s both` }}
+              className={`w-full text-left note-card ${
+                isSelected ? 'note-card-active' : ''
+              }`}
             >
-              <div className="flex items-start justify-between gap-2 mb-0.5">
-                <div className="font-semibold text-[0.8125rem] text-on-surface truncate leading-snug">
-                  {note.isPinned && <span className="text-primary mr-1 text-xs">●</span>}
-                  {note.title || 'Untitled'}
-                </div>
-                <span className="text-[0.625rem] text-on-surface-variant/40 whitespace-nowrap mt-0.5 flex-shrink-0">
-                  {note.updatedAt && formatDate(note.updatedAt)}
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-xs font-semibold text-on-surface flex items-center gap-1.5">
+                  {note.isPinned && (
+                    <Pin
+                      size={10}
+                      className="shrink-0 fill-on-surface text-on-surface"
+                    />
+                  )}
+                  <span className="truncate">{note.title || 'Untitled'}</span>
+                </span>
+                <span className="shrink-0 font-mono text-[10px] text-on-surface-variant/60">
+                  {note.updatedAt ? formatDate(note.updatedAt) : 'Now'}
                 </span>
               </div>
-              <div className="text-[0.75rem] text-on-surface-variant/50 truncate leading-relaxed">
+
+              <p className="mt-1 line-clamp-1 text-[11px] text-on-surface-variant leading-relaxed">
                 {getPreview(note.content)}
-              </div>
+              </p>
+
               {note.tags && note.tags.length > 0 && (
-                <div className="flex gap-1 mt-1.5 overflow-hidden">
+                <div className="mt-2 flex items-center gap-1 overflow-hidden">
                   {note.tags.slice(0, 3).map((tag) => (
-                    <span key={tag} className="tag-pill" style={{ fontSize: '0.5625rem', padding: '1px 6px' }}>
-                      {tag}
+                    <span
+                      key={tag}
+                      className="rounded bg-surface-container px-1.5 py-0.5 font-mono text-[9px] text-on-surface-variant"
+                    >
+                      #{tag}
                     </span>
                   ))}
                   {note.tags.length > 3 && (
-                    <span className="text-[0.5625rem] text-on-surface-variant/30 self-center">+{note.tags.length - 3}</span>
+                    <span className="font-mono text-[9px] text-on-surface-variant/50">
+                      +{note.tags.length - 3}
+                    </span>
                   )}
                 </div>
               )}
-            </div>
-          ))}
-        </div>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Bottom Section */}
-      <div className="border-t border-outline-variant/15 p-3 space-y-0.5">
-        {/* Trash */}
+      {/* Bottom Footer Section */}
+      <div className="border-t border-outline-variant p-3 space-y-1 bg-surface-low">
+        {/* Trash Accordion */}
         <button
-          className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg hover:bg-surface-container transition-colors text-[0.8125rem]"
+          type="button"
+          className="flex items-center gap-2 w-full px-2.5 py-1.5 rounded-lg hover:bg-surface-container transition-colors text-xs cursor-pointer"
           onClick={() => setShowTrash(!showTrash)}
         >
-          <Trash2 size={15} className="opacity-50" />
-          <span className="flex-1 text-left text-on-surface-variant/70">Trash</span>
-          {trashedNotes.length > 0 && (
-            <span className="text-[0.625rem] bg-surface-container px-1.5 py-0.5 rounded-full text-on-surface-variant/50 font-medium">
-              {trashedNotes.length}
-            </span>
+          <Trash2 size={13} className="text-on-surface-variant/70" />
+          <span className="flex-1 text-left text-on-surface-variant font-medium">
+            Trash ({trashedNotes.length})
+          </span>
+          {showTrash ? (
+            <ChevronDown size={13} className="text-on-surface-variant/50" />
+          ) : (
+            <ChevronRight size={13} className="text-on-surface-variant/50" />
           )}
-          {showTrash ? <ChevronDown size={13} className="opacity-30" /> : <ChevronRight size={13} className="opacity-30" />}
         </button>
 
         {showTrash && (
-          <div className="pl-2 max-h-[200px] overflow-y-auto">
+          <div className="pl-2 pr-1 py-1 max-h-[180px] overflow-y-auto space-y-1">
             {trashedNotes.length === 0 && (
-              <div className="text-[0.6875rem] text-on-surface-variant/30 px-3 py-2 italic">Empty</div>
+              <div className="text-[11px] text-on-surface-variant/40 px-2 py-1.5 italic">
+                Trash is empty
+              </div>
             )}
             {trashedNotes.map((note) => (
-              <div key={note.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-surface-container/50">
-                <div className="flex-1 min-w-0 text-[0.75rem] text-on-surface-variant/50 truncate">
+              <div
+                key={note.id}
+                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-surface-lowest border border-outline-variant/60"
+              >
+                <div className="flex-1 min-w-0 text-[11px] text-on-surface-variant truncate">
                   {note.title || 'Untitled'}
                 </div>
                 <button
-                  className="icon-btn !w-6 !h-6 !rounded-md text-primary/60 hover:text-primary"
+                  type="button"
+                  className="icon-btn !w-6 !h-6 !rounded text-on-surface-variant hover:text-on-surface"
                   onClick={() => onRestoreNote(note.id!)}
-                  title="Restore"
+                  title="Restore note"
                 >
-                  <RotateCcw size={12} />
+                  <RotateCcw size={11} />
                 </button>
                 <button
-                  className="icon-btn !w-6 !h-6 !rounded-md text-error/50 hover:text-error"
+                  type="button"
+                  className="icon-btn !w-6 !h-6 !rounded text-on-surface-variant hover:text-on-surface"
                   onClick={() => onPermanentDelete(note.id!)}
-                  title="Delete forever"
+                  title="Delete permanently"
                 >
-                  <X size={12} />
+                  <X size={11} />
                 </button>
               </div>
             ))}
           </div>
         )}
 
-        {/* Settings */}
-        <button
-          onClick={() => window.location.href = '/settings'}
-          className="flex items-center gap-2.5 w-full px-3 py-2 rounded-lg hover:bg-surface-container transition-colors text-[0.8125rem]"
-        >
-          <Settings size={15} className="opacity-50" />
-          <span className="text-on-surface-variant/70">Settings</span>
-        </button>
+        {/* Settings + Sync Status Row */}
+        <div className="flex items-center justify-between pt-1">
+          <button
+            type="button"
+            onClick={() => router.push('/settings')}
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-surface-container transition-colors text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
+          >
+            <Settings size={13} />
+            <span className="font-medium">Settings</span>
+          </button>
+
+          <span className="flex items-center gap-1 px-2 font-mono text-[10px] text-on-surface-variant/60">
+            <Cloud size={11} />
+            Synced
+          </span>
+        </div>
       </div>
     </aside>
   );

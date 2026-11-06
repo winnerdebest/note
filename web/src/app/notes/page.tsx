@@ -2,13 +2,20 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Plus } from 'lucide-react';
+import { Plus, Feather } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Editor from '@/components/Editor';
 import ConfirmModal from '@/components/ConfirmModal';
 import { ToastContainer, useToast } from '@/components/Toast';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
-import { createClient } from '@/utils/supabase/client';
+import {
+  getToken,
+  getMe,
+  fetchNotesApi,
+  createNoteApi,
+  updateNoteApi,
+  deleteNoteApi,
+} from '@/lib/api';
 
 type MobileView = 'list' | 'editor';
 
@@ -20,6 +27,7 @@ export default function NotesPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTag, setActiveTag] = useState('');
   const [mobileView, setMobileView] = useState<MobileView>('list');
+  const [userEmail, setUserEmail] = useState<string>('');
 
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -28,61 +36,73 @@ export default function NotesPage() {
     confirmLabel: string;
     variant: 'danger' | 'default';
     onConfirm: () => void;
-  }>({ isOpen: false, title: '', message: '', confirmLabel: '', variant: 'default', onConfirm: () => {} });
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmLabel: '',
+    variant: 'default',
+    onConfirm: () => {},
+  });
 
   const router = useRouter();
-  const supabase = createClient();
   const { toasts, addToast, dismissToast } = useToast();
 
-  useEffect(() => {
-    const checkUser = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        router.push('/');
-      } else {
-        fetchNotes();
-        fetchTrashedNotes();
+  const fetchNotes = useCallback(
+    async (search?: string, tag?: string) => {
+      try {
+        const data = await fetchNotesApi(false, search, tag);
+        setNotes(data);
+      } catch (error: any) {
+        console.error('Failed to fetch notes:', error);
+        if (
+          error.message?.includes('401') ||
+          error.message?.includes('Could not validate credentials')
+        ) {
+          router.push('/');
+        }
+      } finally {
+        setIsLoading(false);
       }
-    };
-    checkUser();
-  }, []);
+    },
+    [router]
+  );
 
-  const fetchNotes = async (search?: string, tag?: string) => {
+  const fetchTrashedNotes = useCallback(async () => {
     try {
-      const params = new URLSearchParams();
-      if (search) params.set('search', search);
-      if (tag) params.set('tag', tag);
-
-      const res = await fetch(`/api/notes?${params.toString()}`);
-      const data = await res.json();
-      if (data.success) {
-        setNotes(data.data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch notes:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const fetchTrashedNotes = async () => {
-    try {
-      const res = await fetch('/api/notes?deleted=true');
-      const data = await res.json();
-      if (data.success) {
-        setTrashedNotes(data.data);
-      }
+      const data = await fetchNotesApi(true);
+      const trashed = data.filter((n: any) => n.deletedAt !== null);
+      setTrashedNotes(trashed);
     } catch (error) {
       console.error('Failed to fetch trashed notes:', error);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = getToken();
+      if (!token) {
+        router.push('/');
+        return;
+      }
+      try {
+        const me = await getMe();
+        setUserEmail(me.email || '');
+        await Promise.all([fetchNotes(), fetchTrashedNotes()]);
+      } catch (err) {
+        console.error('Session validation error:', err);
+        router.push('/');
+      }
+    };
+    checkAuth();
+  }, [fetchNotes, fetchTrashedNotes, router]);
 
   const handleSearchChange = useCallback(
     (q: string) => {
       setSearchQuery(q);
       fetchNotes(q, activeTag);
     },
-    [activeTag]
+    [activeTag, fetchNotes]
   );
 
   const handleTagChange = useCallback(
@@ -90,7 +110,7 @@ export default function NotesPage() {
       setActiveTag(tag);
       fetchNotes(searchQuery, tag);
     },
-    [searchQuery]
+    [searchQuery, fetchNotes]
   );
 
   const allTags = useMemo(() => {
@@ -99,7 +119,6 @@ export default function NotesPage() {
     return Array.from(tagSet).sort();
   }, [notes]);
 
-  // Create new note — on mobile, jump to editor
   const handleNewNote = () => {
     const newNote = {
       title: '',
@@ -111,7 +130,6 @@ export default function NotesPage() {
     setMobileView('editor');
   };
 
-  // Select note — on mobile, jump to editor
   const handleSelectNote = (id: string) => {
     const found = notes.find((n) => n.id === id);
     if (found) {
@@ -120,30 +138,20 @@ export default function NotesPage() {
     }
   };
 
-  // Back to list on mobile
   const handleMobileBack = () => {
     setMobileView('list');
-    // Don't clear activeNote so desktop still shows it
   };
 
   const handleSaveNote = async (noteData: any) => {
     try {
-      const method = noteData.id ? 'PATCH' : 'POST';
-      const url = noteData.id ? `/api/notes/${noteData.id}` : '/api/notes';
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(noteData),
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        await fetchNotes(searchQuery, activeTag);
-        setActiveNote(data.data);
+      let saved: any;
+      if (noteData.id) {
+        saved = await updateNoteApi(noteData.id, noteData);
       } else {
-        addToast('error', 'Failed to save note');
+        saved = await createNoteApi(noteData);
       }
+      await fetchNotes(searchQuery, activeTag);
+      setActiveNote(saved);
     } catch (error) {
       console.error('Failed to save note:', error);
       addToast('error', 'Failed to save note');
@@ -154,21 +162,19 @@ export default function NotesPage() {
     setConfirmModal({
       isOpen: true,
       title: 'Move to Trash',
-      message: 'This note will be moved to trash. You can restore it later from the sidebar.',
+      message:
+        'This note will be moved to trash. You can restore it anytime from the sidebar.',
       confirmLabel: 'Move to Trash',
       variant: 'danger',
       onConfirm: async () => {
         try {
-          const res = await fetch(`/api/notes/${id}`, { method: 'DELETE' });
-          const data = await res.json();
-          if (data.success) {
-            await fetchNotes(searchQuery, activeTag);
-            await fetchTrashedNotes();
-            setActiveNote(null);
-            setMobileView('list');
-            addToast('success', 'Moved to trash');
-          }
-        } catch (error) {
+          await deleteNoteApi(id, false);
+          await fetchNotes(searchQuery, activeTag);
+          await fetchTrashedNotes();
+          setActiveNote(null);
+          setMobileView('list');
+          addToast('success', 'Moved to trash');
+        } catch {
           addToast('error', 'Failed to delete note');
         }
         setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -178,18 +184,11 @@ export default function NotesPage() {
 
   const handleRestoreNote = async (id: string) => {
     try {
-      const res = await fetch(`/api/notes/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ restore: true }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        await fetchNotes(searchQuery, activeTag);
-        await fetchTrashedNotes();
-        addToast('success', 'Note restored');
-      }
-    } catch (error) {
+      await updateNoteApi(id, { deletedAt: null });
+      await fetchNotes(searchQuery, activeTag);
+      await fetchTrashedNotes();
+      addToast('success', 'Note restored');
+    } catch {
       addToast('error', 'Failed to restore note');
     }
   };
@@ -198,18 +197,15 @@ export default function NotesPage() {
     setConfirmModal({
       isOpen: true,
       title: 'Delete Permanently',
-      message: 'This cannot be undone. The note will be gone forever.',
+      message: 'This cannot be undone. The note will be permanently removed.',
       confirmLabel: 'Delete Forever',
       variant: 'danger',
       onConfirm: async () => {
         try {
-          const res = await fetch(`/api/notes/${id}?permanent=true`, { method: 'DELETE' });
-          const data = await res.json();
-          if (data.success) {
-            await fetchTrashedNotes();
-            addToast('info', 'Permanently deleted');
-          }
-        } catch (error) {
+          await deleteNoteApi(id, true);
+          await fetchTrashedNotes();
+          addToast('info', 'Permanently deleted');
+        } catch {
           addToast('error', 'Failed to delete');
         }
         setConfirmModal((prev) => ({ ...prev, isOpen: false }));
@@ -217,7 +213,6 @@ export default function NotesPage() {
     });
   };
 
-  // Global shortcuts
   const shortcuts = useMemo(
     () => ({
       'ctrl+n': () => handleNewNote(),
@@ -235,61 +230,102 @@ export default function NotesPage() {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-surface">
+      <div className="flex h-dvh w-screen items-center justify-center bg-surface">
         <div className="flex flex-col items-center gap-3">
-          <div className="w-7 h-7 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-          <span className="text-xs text-on-surface-variant/50 font-medium">Loading…</span>
+          <div className="w-6 h-6 border-2 border-on-surface/20 border-t-on-surface rounded-full animate-spin" />
+          <span className="text-xs text-on-surface-variant font-mono">
+            Opening workspace…
+          </span>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-surface">
-      {/* === SIDEBAR / LIST VIEW === */}
-      {/* Desktop: always visible. Mobile: only when mobileView === 'list' */}
-      <div className={`
-        ${mobileView === 'list' ? 'flex' : 'hidden'}
-        md:flex
-        w-full md:w-[320px] flex-shrink-0
-        border-r border-outline-variant/10
-        h-full
-      `}>
-        <Sidebar
-          notes={notes}
-          trashedNotes={trashedNotes}
-          activeNoteId={activeNote?.id}
-          onNewNote={handleNewNote}
-          onSelectNote={handleSelectNote}
-          onRestoreNote={handleRestoreNote}
-          onPermanentDelete={handlePermanentDelete}
-          searchQuery={searchQuery}
-          onSearchChange={handleSearchChange}
-          activeTag={activeTag}
-          onTagChange={handleTagChange}
-          allTags={allTags}
-        />
+    <div className="flex flex-col h-dvh w-screen overflow-hidden bg-surface text-on-surface">
+      {/* Top Studio Bar — Desktop Only (Matches Landing Page AppPreview Chrome, no duplicate Settings button) */}
+      <header className="hidden md:flex items-center justify-between border-b border-outline-variant/80 bg-surface-low/80 px-4 py-2 shrink-0">
+        <div className="flex items-center gap-2.5">
+          <a
+            href="/"
+            translate="no"
+            className="flex items-center gap-2 text-xs font-semibold tracking-tight text-on-surface hover:opacity-80 transition-opacity"
+          >
+            <span className="flex size-5 items-center justify-center rounded border border-outline-variant bg-surface-lowest text-on-surface">
+              <Feather size={11} />
+            </span>
+            <span>Notes</span>
+            <span className="font-normal text-on-surface-variant">by Winner</span>
+          </a>
+          <span className="h-3.5 w-px bg-outline-variant" />
+          <span className="font-mono text-[11px] text-on-surface-variant truncate">
+            {userEmail || 'Personal Workspace'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-lowest px-2.5 py-0.5 text-[11px] font-medium text-on-surface-variant">
+            <span className="size-1.5 rounded-full bg-on-surface" />
+            Synced across devices
+          </span>
+        </div>
+      </header>
+
+      {/* Split Workspace */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+        {/* Sidebar */}
+        <div
+          className={`
+            ${mobileView === 'list' ? 'flex' : 'hidden'}
+            md:flex
+            w-full md:w-[300px] flex-shrink-0
+            border-r border-outline-variant/80
+            h-full
+          `}
+        >
+          <Sidebar
+            notes={notes}
+            trashedNotes={trashedNotes}
+            activeNoteId={activeNote?.id}
+            onNewNote={handleNewNote}
+            onSelectNote={handleSelectNote}
+            onRestoreNote={handleRestoreNote}
+            onPermanentDelete={handlePermanentDelete}
+            searchQuery={searchQuery}
+            onSearchChange={handleSearchChange}
+            activeTag={activeTag}
+            onTagChange={handleTagChange}
+            allTags={allTags}
+          />
+        </div>
+
+        {/* Editor */}
+        <div
+          className={`
+            ${mobileView === 'editor' ? 'flex' : 'hidden'}
+            md:flex
+            flex-1 h-full min-w-0
+          `}
+        >
+          <Editor
+            note={mobileView === 'editor' || activeNote ? activeNote : null}
+            onSave={handleSaveNote}
+            onDelete={handleDeleteNote}
+            onBack={handleMobileBack}
+            onNewNote={handleNewNote}
+          />
+        </div>
       </div>
 
-      {/* === EDITOR VIEW === */}
-      {/* Desktop: always visible. Mobile: only when mobileView === 'editor' */}
-      <div className={`
-        ${mobileView === 'editor' ? 'flex' : 'hidden'}
-        md:flex
-        flex-1 h-full min-w-0
-      `}>
-        <Editor
-          note={mobileView === 'editor' || activeNote ? activeNote : null}
-          onSave={handleSaveNote}
-          onDelete={handleDeleteNote}
-          onBack={handleMobileBack}
-        />
-      </div>
-
-      {/* === MOBILE FAB (New Note) === shown only on list view on mobile */}
+      {/* Mobile Floating Action Button (positioned above bottom bar so it never overlaps) */}
       {mobileView === 'list' && (
-        <button className="fab md:hidden" onClick={handleNewNote}>
-          <Plus size={24} strokeWidth={2.5} />
+        <button
+          type="button"
+          aria-label="New note"
+          className="fab md:hidden !bottom-16 !right-4"
+          onClick={handleNewNote}
+        >
+          <Plus size={22} strokeWidth={2.5} />
         </button>
       )}
 
@@ -304,7 +340,6 @@ export default function NotesPage() {
         onCancel={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
       />
 
-      {/* Toast Notifications */}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );

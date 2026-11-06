@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.config import settings
 from app.database import engine, Base
 from app.routers import auth_router, notes_router
 # Import models to ensure they are registered with Base.metadata
@@ -17,16 +18,20 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(
-    title="NoteApp API",
-    description="FastAPI Backend for NoteApp with Mobile Offline-First Synchronization",
+    title="Notes by Winner API",
+    description="FastAPI Backend for Notes by Winner (Web & Android)",
     version="1.0.0",
     lifespan=lifespan
 )
 
-# Configure CORS for Mobile and Web clients
+# Configure CORS for Web and Mobile clients (supports Render & custom frontend domains)
+raw_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+allow_all = "*" in raw_origins or not raw_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"] if allow_all else raw_origins,
+    allow_origin_regex=".*" if allow_all else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

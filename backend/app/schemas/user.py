@@ -10,6 +10,12 @@ class UserRegister(UserBase):
 class UserLogin(UserBase):
     password: str
 
+class GoogleAuthRequest(BaseModel):
+    access_token: str | None = None
+    id_token: str | None = None
+    code: str | None = None
+    redirect_uri: str | None = "postmessage"
+
 class UserResponse(UserBase):
     id: str
     created_at: datetime

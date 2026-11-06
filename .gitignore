@@ -33,6 +33,8 @@ mobile/.expo/
 *.env
 **/.env
 **/.env*.local
+!.env.example
+!**/.env.example
 
 # Python / FastAPI
 backend/__pycache__/
