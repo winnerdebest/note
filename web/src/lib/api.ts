@@ -1,4 +1,6 @@
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+const API_BASE_URL = (
+  process.env.NEXT_PUBLIC_API_URL || 'https://note-backend-gnep.onrender.com'
+).replace(/\/+$/, '');
 export const GOOGLE_CLIENT_ID =
   process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
   '728681741345-jcjahvj8tbh79i55d5qe2ko1b88598v3.apps.googleusercontent.com';
