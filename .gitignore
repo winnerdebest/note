@@ -60,3 +60,5 @@ venv/
 *.pem
 Thumbs.db
 firebase-debug.log*
+note/
+.vercel/
