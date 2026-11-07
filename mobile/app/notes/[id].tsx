@@ -12,6 +12,7 @@ import {
   Keyboard,
   AppState,
   StatusBar,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -27,7 +28,7 @@ import { runSync } from '../../lib/sync';
 import * as Haptics from 'expo-haptics';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-root-toast';
-import { RichEditor, RichToolbar, actions } from 'react-native-pell-rich-editor';
+import { RichEditor, actions } from 'react-native-pell-rich-editor';
 
 const generateId = () =>
   'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -43,7 +44,7 @@ const generateId = () =>
 function markdownToHtml(md: string): string {
   if (!md || !md.trim()) return '';
   // If already contains HTML block tags from previous mobile edits, return as-is
-  if (/<(p|div|h1|h2|h3|ul|ol|li|blockquote|b|strong|i|em|code)\b/i.test(md)) {
+  if (/<(p|div|h1|h2|h3|ul|ol|li|blockquote)\b/i.test(md)) {
     return md;
   }
 
@@ -69,6 +70,10 @@ function markdownToHtml(md: string): string {
         const checked = todo[1].toLowerCase() === 'x' ? 'checked' : '';
         return `<div><input type="checkbox" ${checked}/> ${inline(todo[2])}</div>`;
       }
+      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+      if (bullet) {
+        return `<ul><li>${inline(bullet[1])}</li></ul>`;
+      }
       if (!line.trim()) return '<p><br/></p>';
       return `<p>${inline(line)}</p>`;
     })
@@ -77,10 +82,9 @@ function markdownToHtml(md: string): string {
 
 function htmlToMarkdown(html: string): string {
   if (!html || !html.trim()) return '';
-  // If it doesn't contain HTML tags, it's already raw Markdown
   if (!/<[a-z][\s\S]*>/i.test(html)) return html;
 
-  let text = html
+  const text = html
     .replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '# $1\n')
     .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '## $1\n')
     .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '### $1\n')
@@ -90,6 +94,8 @@ function htmlToMarkdown(html: string): string {
     .replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`')
     .replace(/<li[^>]*>\s*<input[^>]*checked[^>]*>\s*([\s\S]*?)<\/li>/gi, '- [x] $1\n')
     .replace(/<li[^>]*>\s*<input[^>]*>\s*([\s\S]*?)<\/li>/gi, '- [ ] $1\n')
+    .replace(/<div[^>]*>\s*<input[^>]*checked[^>]*>\s*([\s\S]*?)<\/div>/gi, '- [x] $1\n')
+    .replace(/<div[^>]*>\s*<input[^>]*>\s*([\s\S]*?)<\/div>/gi, '- [ ] $1\n')
     .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div)>/gi, '\n')
@@ -109,6 +115,7 @@ export default function NoteEditorScreen() {
   const router = useRouter();
 
   const [noteId] = useState(isNew ? generateId() : id);
+  const [isNoteLoaded, setIsNoteLoaded] = useState(isNew);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [visualHtml, setVisualHtml] = useState('');
@@ -118,8 +125,11 @@ export default function NoteEditorScreen() {
   const [tagInput, setTagInput] = useState('');
   const [userId, setUserId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   const richEditorRef = useRef<RichEditor>(null);
+  const isEditorReadyRef = useRef(false);
+  const visualHtmlRef = useRef('');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const titleRef = useRef(title);
@@ -140,26 +150,65 @@ export default function NoteEditorScreen() {
     isPinnedRef.current = isPinned;
   }, [isPinned]);
 
+  // Track keyboard height so the formatting toolbar docks directly on top of the keyboard
   useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates?.height || 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
     const loadNote = async () => {
       const uid = await getUserId();
-      if (uid) setUserId(uid);
+      if (uid && mounted) setUserId(uid);
 
       if (!isNew) {
         const local = await getLocalNote(id);
-        if (local) {
-          const cleanMd = htmlToMarkdown(local.content);
-          const html = markdownToHtml(local.content);
-          setTitle(local.title);
+        if (local && mounted) {
+          const cleanMd = htmlToMarkdown(local.content || '');
+          const html = markdownToHtml(local.content || '');
+          visualHtmlRef.current = html;
+          contentRef.current = cleanMd;
+          titleRef.current = local.title || '';
+          setTitle(local.title || '');
           setContent(cleanMd);
           setVisualHtml(html);
           setIsPinned(local.is_pinned);
           setTags(local.tags || []);
+
+          if (isEditorReadyRef.current && richEditorRef.current) {
+            richEditorRef.current.setContentHTML(html);
+          }
         }
+      }
+      if (mounted) {
+        setIsNoteLoaded(true);
       }
     };
     loadNote();
+    return () => {
+      mounted = false;
+    };
   }, [id, isNew]);
+
+  const handleEditorInitialized = useCallback(() => {
+    isEditorReadyRef.current = true;
+    if (visualHtmlRef.current && richEditorRef.current) {
+      richEditorRef.current.setContentHTML(visualHtmlRef.current);
+    }
+  }, []);
 
   const toggleEditorMode = async (nextShowSyntax: boolean) => {
     if (nextShowSyntax === showSyntax) return;
@@ -183,12 +232,67 @@ export default function NoteEditorScreen() {
     } else {
       // Syntax -> Visual: convert Markdown to visual HTML
       const html = markdownToHtml(contentRef.current);
+      visualHtmlRef.current = html;
       setVisualHtml(html);
       setShowSyntax(false);
       setTimeout(() => {
         richEditorRef.current?.setContentHTML(html);
-      }, 50);
+      }, 60);
     }
+  };
+
+  // Formatting actions for our Keyboard-Docked Studio Bar (works in both Visual & Syntax modes!)
+  const applyFormat = async (
+    type: 'bold' | 'italic' | 'h2' | 'quote' | 'todo' | 'bullet' | 'code' | 'undo' | 'redo'
+  ) => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    if (!showSyntax && richEditorRef.current) {
+      const actionMap: Record<typeof type, string> = {
+        bold: actions.setBold,
+        italic: actions.setItalic,
+        h2: actions.heading2,
+        quote: actions.blockquote,
+        todo: actions.checkboxList,
+        bullet: actions.insertBulletsList,
+        code: actions.code,
+        undo: actions.undo,
+        redo: actions.redo,
+      };
+      richEditorRef.current.sendAction(actionMap[type], 'result');
+      return;
+    }
+
+    // Syntax mode Markdown helpers
+    const current = contentRef.current;
+    let updated = current;
+    switch (type) {
+      case 'bold':
+        updated = `${current}${current.endsWith(' ') || !current ? '' : ' '}**bold**`;
+        break;
+      case 'italic':
+        updated = `${current}${current.endsWith(' ') || !current ? '' : ' '}*italic*`;
+        break;
+      case 'h2':
+        updated = `${current}${current && !current.endsWith('\n') ? '\n' : ''}## `;
+        break;
+      case 'quote':
+        updated = `${current}${current && !current.endsWith('\n') ? '\n' : ''}> `;
+        break;
+      case 'todo':
+        updated = `${current}${current && !current.endsWith('\n') ? '\n' : ''}- [ ] `;
+        break;
+      case 'bullet':
+        updated = `${current}${current && !current.endsWith('\n') ? '\n' : ''}- `;
+        break;
+      case 'code':
+        updated = `${current}${current.endsWith(' ') || !current ? '' : ' '}\`code\``;
+        break;
+      default:
+        break;
+    }
+    setContent(updated);
+    contentRef.current = updated;
   };
 
   const saveNote = useCallback(
@@ -248,12 +352,13 @@ export default function NoteEditorScreen() {
   );
 
   useEffect(() => {
+    if (!isNoteLoaded) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => saveNote(false), 1800);
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [title, content, isPinned, tags, saveNote]);
+  }, [title, content, isPinned, tags, saveNote, isNoteLoaded]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
@@ -313,7 +418,10 @@ export default function NoteEditorScreen() {
   }, [content]);
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: colors.background }]}
+      edges={['top', 'bottom']}
+    >
       <StatusBar
         barStyle={isDark ? 'light-content' : 'dark-content'}
         backgroundColor={colors.background}
@@ -425,7 +533,12 @@ export default function NoteEditorScreen() {
       </View>
 
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={[
+          styles.keyboardContainer,
+          Platform.OS === 'android' && keyboardHeight > 0
+            ? { paddingBottom: keyboardHeight }
+            : null,
+        ]}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
@@ -476,14 +589,21 @@ export default function NoteEditorScreen() {
 
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-          {/* Editor Canvas: Visual Mode (Hides ** & `) vs Syntax Mode */}
-          {!showSyntax ? (
+          {/* Editor Canvas: Visual Mode vs Syntax Mode */}
+          {!isNoteLoaded ? (
+            <View style={styles.loadingBox}>
+              <ActivityIndicator size="small" color={colors.text} />
+            </View>
+          ) : !showSyntax ? (
             <View style={styles.editorContainer}>
               <RichEditor
+                key={`editor-${noteId}`}
                 ref={richEditorRef}
                 style={styles.richEditor}
                 initialContentHTML={visualHtml}
+                editorInitializedCallback={handleEditorInitialized}
                 onChange={(html) => {
+                  visualHtmlRef.current = html;
                   setVisualHtml(html);
                   setContent(htmlToMarkdown(html));
                 }}
@@ -495,13 +615,13 @@ export default function NoteEditorScreen() {
                     font-size: 16px;
                     line-height: 1.75;
                     color: ${colors.text};
-                    padding: 0;
+                    padding: 0 0 80px 0;
                     caret-color: ${colors.text};
                   `,
                   placeholderColor: colors.textMuted,
                 }}
-                initialHeight={420}
-                useContainer={false}
+                initialHeight={380}
+                useContainer={true}
               />
             </View>
           ) : (
@@ -510,7 +630,10 @@ export default function NoteEditorScreen() {
               placeholder="Raw Markdown syntax (**bold**, `code`, ## Heading)…"
               placeholderTextColor={colors.textMuted}
               value={content}
-              onChangeText={setContent}
+              onChangeText={(val) => {
+                setContent(val);
+                contentRef.current = val;
+              }}
               multiline
               textAlignVertical="top"
               autoCapitalize="sentences"
@@ -518,43 +641,108 @@ export default function NoteEditorScreen() {
           )}
         </ScrollView>
 
-        {/* Bottom Word Count + Rich Formatting Toolbar */}
+        {/* Keyboard-Docked Formatting Toolbar + Word Count Bar */}
         <View
           style={[
-            styles.footerBar,
-            { backgroundColor: colors.background, borderTopColor: colors.border },
+            styles.bottomDock,
+            {
+              backgroundColor: colors.surface,
+              borderTopColor: colors.border,
+            },
           ]}
         >
-          <Text style={[styles.footerText, { color: colors.textMuted }]}>
-            {stats.words} words · {stats.readMins} min read
-          </Text>
-          <Text style={[styles.footerText, { color: colors.textMuted }]}>
-            {isSaving ? 'Saving…' : showSyntax ? 'Syntax mode' : 'Visual · Auto-saved'}
-          </Text>
-        </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="always"
+            contentContainerStyle={styles.formatBarContent}
+          >
+            <TouchableOpacity
+              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={() => applyFormat('bold')}
+            >
+              <Feather name="bold" size={15} color={colors.text} />
+            </TouchableOpacity>
 
-        {!showSyntax && (
-          <RichToolbar
-            editor={richEditorRef}
-            actions={[
-              actions.heading2,
-              actions.setBold,
-              actions.setItalic,
-              actions.blockquote,
-              actions.checkboxList,
-              actions.code,
-              actions.insertBulletsList,
-              actions.undo,
-              actions.redo,
-            ]}
-            iconTint={colors.textSecondary}
-            selectedIconTint={colors.text}
-            style={[
-              styles.toolbar,
-              { backgroundColor: colors.surface, borderTopColor: colors.border },
-            ]}
-          />
-        )}
+            <TouchableOpacity
+              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={() => applyFormat('italic')}
+            >
+              <Feather name="italic" size={15} color={colors.text} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={() => applyFormat('h2')}
+            >
+              <Text style={[styles.formatBtnLabel, { color: colors.text }]}>H2</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={() => applyFormat('todo')}
+            >
+              <Feather name="check-square" size={15} color={colors.text} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={() => applyFormat('bullet')}
+            >
+              <Feather name="list" size={15} color={colors.text} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={() => applyFormat('quote')}
+            >
+              <Text style={[styles.formatBtnLabel, { color: colors.text }]}>“ ”</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+              onPress={() => applyFormat('code')}
+            >
+              <Feather name="code" size={15} color={colors.text} />
+            </TouchableOpacity>
+
+            {!showSyntax && (
+              <>
+                <TouchableOpacity
+                  style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+                  onPress={() => applyFormat('undo')}
+                >
+                  <Feather name="rotate-ccw" size={14} color={colors.textSecondary} />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
+                  onPress={() => applyFormat('redo')}
+                >
+                  <Feather name="rotate-cw" size={14} color={colors.textSecondary} />
+                </TouchableOpacity>
+              </>
+            )}
+
+            {keyboardHeight > 0 && (
+              <TouchableOpacity
+                style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.accent }]}
+                onPress={() => Keyboard.dismiss()}
+              >
+                <Feather name="chevron-down" size={15} color={colors.accentText} />
+              </TouchableOpacity>
+            )}
+          </ScrollView>
+
+          <View style={[styles.footerBar, { borderTopColor: colors.border, backgroundColor: colors.background }]}>
+            <Text style={[styles.footerText, { color: colors.textMuted }]}>
+              {stats.words} words · {stats.readMins} min read
+            </Text>
+            <Text style={[styles.footerText, { color: colors.textMuted }]}>
+              {isSaving ? 'Saving…' : showSyntax ? 'Syntax mode' : 'Visual · Auto-saved'}
+            </Text>
+          </View>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -562,6 +750,7 @@ export default function NoteEditorScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  keyboardContainer: { flex: 1 },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -652,34 +841,59 @@ const styles = StyleSheet.create({
     height: 1,
     marginBottom: 16,
   },
+  loadingBox: {
+    height: 220,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   editorContainer: {
-    minHeight: 420,
+    minHeight: 380,
     paddingBottom: 24,
   },
   richEditor: {
     backgroundColor: 'transparent',
+    minHeight: 380,
   },
   syntaxInput: {
-    minHeight: 420,
+    minHeight: 380,
     fontSize: 14,
     lineHeight: 24,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     paddingBottom: 24,
   },
+  bottomDock: {
+    borderTopWidth: 1,
+  },
+  formatBarContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  formatBtn: {
+    height: 34,
+    minWidth: 36,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  formatBtnLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
   footerBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
     borderTopWidth: 1,
   },
   footerText: {
     fontSize: 11,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  toolbar: {
-    borderTopWidth: 1,
-    height: 46,
   },
 });

@@ -56,8 +56,28 @@ export default function LandingPage() {
   const [scrolled, setScrolled] = useState(false);
   const [activeShortcut, setActiveShortcut] = useState<string>('new');
   const [quickGoogleLoading, setQuickGoogleLoading] = useState(false);
+  const [mobileAuthRedirectUrl, setMobileAuthRedirectUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    const winRedirect = (window as any).__MOBILE_AUTH_REDIRECT__;
+    if (winRedirect) {
+      setMobileAuthRedirectUrl(winRedirect);
+      window.location.replace(winRedirect);
+      return;
+    }
+    if (window.location.hash && window.location.hash.includes('access_token=')) {
+      const params = new URLSearchParams(window.location.hash.slice(1));
+      const gToken = params.get('access_token');
+      const state = params.get('state');
+      if (gToken && state && (state.startsWith('exp://') || state.startsWith('notesbywinner://'))) {
+        const sep = state.includes('?') ? '&' : '?';
+        const target = `${state}${sep}google_access_token=${encodeURIComponent(gToken)}`;
+        setMobileAuthRedirectUrl(target);
+        window.location.replace(target);
+        return;
+      }
+    }
+
     if (getToken()) {
       getMe()
         .then(() => setIsAuthed(true))
@@ -95,6 +115,31 @@ export default function LandingPage() {
 
   const selectedShortcut =
     SHORTCUTS.find((s) => s.id === activeShortcut) || SHORTCUTS[0];
+
+  if (mobileAuthRedirectUrl) {
+    return (
+      <div className="lp-light min-h-dvh bg-white text-neutral-900 font-inter flex items-center justify-center p-6">
+        <div className="w-full max-w-xs rounded-2xl border border-neutral-200 bg-white p-7 text-center shadow-sm">
+          <div className="mx-auto mb-4 flex size-10 items-center justify-center rounded-xl bg-neutral-900 text-white">
+            <Feather size={18} strokeWidth={2.2} />
+          </div>
+          <h1 className="text-base font-semibold tracking-tight text-neutral-900">
+            Returning to Notes by Winner…
+          </h1>
+          <p className="mt-1.5 text-xs text-neutral-500">
+            Your Google account is connected.
+          </p>
+          <a
+            href={mobileAuthRedirectUrl}
+            className="lp-btn lp-btn-ink mt-5 w-full !h-10 justify-center text-xs"
+          >
+            <span>Open Notes App</span>
+            <ArrowRight size={14} />
+          </a>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="lp-light min-h-screen bg-white text-neutral-900 font-inter antialiased selection:bg-neutral-900 selection:text-white">

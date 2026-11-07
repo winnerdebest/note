@@ -86,12 +86,12 @@ export default function AuthScreen() {
             style={[
               styles.brandIcon,
               {
-                backgroundColor: colors.surface,
-                borderColor: colors.border,
+                backgroundColor: colors.accent,
+                borderColor: colors.accent,
               },
             ]}
           >
-            <Feather name="feather" size={16} color={colors.text} />
+            <Feather name="feather" size={16} color={colors.accentText} />
           </View>
           <Text style={[styles.brandTitle, { color: colors.text }]}>
             Notes <Text style={{ color: colors.textMuted, fontWeight: '400' }}>by Winner</Text>

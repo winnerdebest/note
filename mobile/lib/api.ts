@@ -77,20 +77,44 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   return response.json();
 };
 
+export const loginWithGoogleToken = async (payload: {
+  access_token?: string;
+  id_token?: string;
+  code?: string;
+}): Promise<AuthResponse> => {
+  const data = await apiFetch('/api/v1/auth/google', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  await setAuthSession(data.access_token, data.user);
+  return data;
+};
+
 /**
- * Option 1: Hosted Web Auth Bridge
- * Opens the /mobile-auth bridge on the hosted web domain (e.g. https://notes.buildwithwinner.name.ng/mobile-auth)
- * which runs Google OAuth on the authorized web origin and redirects back via deep link with the JWT + User.
+ * Option A: 1-Tap Direct Google Account Picker
+ * Opens Google's OAuth 2.0 account chooser directly (skipping any intermediate webpage button),
+ * then bounces through the authorized web origin in 0ms back to the mobile app deep link.
  */
 export const signInWithGoogleMobileBridge = async (): Promise<AuthResponse> => {
   if (!WEB_BASE_URL) {
     throw new Error('EXPO_PUBLIC_WEB_URL is not configured in .env');
   }
+  if (!GOOGLE_CLIENT_ID) {
+    throw new Error('EXPO_PUBLIC_GOOGLE_CLIENT_ID is not configured in .env');
+  }
 
   const redirectUri = Linking.createURL('auth');
-  const authUrl = `${WEB_BASE_URL}/mobile-auth?redirect_uri=${encodeURIComponent(redirectUri)}`;
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: WEB_BASE_URL,
+    response_type: 'token',
+    scope: 'openid email profile',
+    prompt: 'select_account',
+    state: redirectUri,
+  });
 
-  const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  const result = await WebBrowser.openAuthSessionAsync(googleAuthUrl, redirectUri);
 
   if (result.type !== 'success' || !result.url) {
     throw new Error('Google sign-in was cancelled.');
@@ -101,6 +125,16 @@ export const signInWithGoogleMobileBridge = async (): Promise<AuthResponse> => {
 
 export const completeSessionFromRedirectUrl = async (url: string): Promise<AuthResponse> => {
   const parsed = Linking.parse(url);
+  const googleAccessToken = parsed.queryParams?.google_access_token as string | undefined;
+  const googleIdToken = parsed.queryParams?.google_id_token as string | undefined;
+
+  if (googleAccessToken || googleIdToken) {
+    return loginWithGoogleToken({
+      access_token: googleAccessToken ? decodeURIComponent(googleAccessToken) : undefined,
+      id_token: googleIdToken ? decodeURIComponent(googleIdToken) : undefined,
+    });
+  }
+
   const token = parsed.queryParams?.token as string | undefined;
   const userRaw = parsed.queryParams?.user as string | undefined;
 
