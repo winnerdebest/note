@@ -11,7 +11,8 @@ import { getUserId } from '../lib/auth';
 import { getStoredUser, getToken, User } from '../lib/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const THEME_KEY = 'mindfulcanvas_theme_mode';
+const THEME_KEY = 'notesbywinner_theme_mode';
+const LEGACY_THEME_KEY = 'mindfulcanvas_theme_mode';
 
 export default function RootLayout() {
   const [session, setSession] = useState<User | null>(null);
@@ -29,9 +30,10 @@ export default function RootLayout() {
 
   // Load saved theme on startup
   useEffect(() => {
-    AsyncStorage.getItem(THEME_KEY).then(saved => {
-      if (saved === 'light' || saved === 'dark' || saved === 'system') {
-        setThemeModeState(saved);
+    AsyncStorage.getItem(THEME_KEY).then(async saved => {
+      const value = saved || (await AsyncStorage.getItem(LEGACY_THEME_KEY));
+      if (value === 'light' || value === 'dark' || value === 'system') {
+        setThemeModeState(value);
       }
     });
   }, []);

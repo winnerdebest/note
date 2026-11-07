@@ -1,4 +1,3 @@
-import { useColorScheme } from 'react-native';
 import { createContext, useContext } from 'react';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
@@ -6,12 +5,14 @@ export type ThemeMode = 'light' | 'dark' | 'system';
 export interface ColorScheme {
   background: string;
   surface: string;
+  surfaceContainer: string;
   card: string;
   cardElevated: string;
   text: string;
   textSecondary: string;
   textMuted: string;
   accent: string;
+  accentText: string;
   accentSoft: string;
   border: string;
   borderSubtle: string;
@@ -28,54 +29,65 @@ export interface ColorScheme {
   searchBackground: string;
 }
 
+/**
+ * Monochrome Paper & Ink Design System
+ * Light Mode: Paper-dominant (#FFFFFF / #FAFAFA) with crisp #171717 Ink
+ */
 const lightColors: ColorScheme = {
-  background: '#F8F6F2',
-  surface: '#FFFFFF',
+  background: '#FFFFFF',
+  surface: '#FAFAFA',
+  surfaceContainer: '#F5F5F5',
   card: '#FFFFFF',
-  cardElevated: '#FEFEFE',
-  text: '#1A1A2E',
-  textSecondary: '#4A4A68',
-  textMuted: '#9898B0',
-  accent: '#6C63FF',
-  accentSoft: '#EDE9FF',
-  border: '#E8E6F0',
-  borderSubtle: '#F0EEF8',
-  danger: '#FF4757',
-  dangerSoft: '#FFEBEE',
-  success: '#2ECC71',
-  warning: '#F39C12',
-  pin: '#F4A261',
-  overlay: 'rgba(26, 26, 46, 0.5)',
-  glassBackground: 'rgba(255, 255, 255, 0.85)',
-  glassBorder: 'rgba(108, 99, 255, 0.15)',
-  tagBackground: '#EDE9FF',
-  tagText: '#6C63FF',
-  searchBackground: '#F0EEF8',
+  cardElevated: '#FFFFFF',
+  text: '#171717',
+  textSecondary: '#525252',
+  textMuted: '#737373',
+  accent: '#171717',
+  accentText: '#FFFFFF',
+  accentSoft: '#F5F5F5',
+  border: '#E5E5E5',
+  borderSubtle: '#F0F0F0',
+  danger: '#171717',
+  dangerSoft: '#F5F5F5',
+  success: '#171717',
+  warning: '#525252',
+  pin: '#171717',
+  overlay: 'rgba(10, 10, 10, 0.4)',
+  glassBackground: 'rgba(255, 255, 255, 0.9)',
+  glassBorder: 'rgba(23, 23, 23, 0.1)',
+  tagBackground: '#F5F5F5',
+  tagText: '#404040',
+  searchBackground: '#FAFAFA',
 };
 
+/**
+ * Dark Mode: Ink-dominant (#0A0A0A / #141414) with crisp #FAFAFA Paper text
+ */
 const darkColors: ColorScheme = {
-  background: '#0D0D1A',
-  surface: '#16162A',
-  card: '#1E1E35',
-  cardElevated: '#252540',
-  text: '#F0EEFF',
-  textSecondary: '#A8A8C8',
-  textMuted: '#5A5A7A',
-  accent: '#8B7FFF',
-  accentSoft: '#2A2850',
-  border: '#2A2A45',
-  borderSubtle: '#1E1E35',
-  danger: '#FF6B7A',
-  dangerSoft: '#3D1A1F',
-  success: '#48D68A',
-  warning: '#FFB347',
-  pin: '#F4A261',
-  overlay: 'rgba(0, 0, 0, 0.7)',
-  glassBackground: 'rgba(22, 22, 42, 0.9)',
-  glassBorder: 'rgba(139, 127, 255, 0.2)',
-  tagBackground: '#2A2850',
-  tagText: '#8B7FFF',
-  searchBackground: '#1E1E35',
+  background: '#0A0A0A',
+  surface: '#121212',
+  surfaceContainer: '#1F1F1F',
+  card: '#161616',
+  cardElevated: '#1C1C1C',
+  text: '#FAFAFA',
+  textSecondary: '#A3A3A3',
+  textMuted: '#737373',
+  accent: '#FAFAFA',
+  accentText: '#0A0A0A',
+  accentSoft: '#1F1F1F',
+  border: '#262626',
+  borderSubtle: '#1A1A1A',
+  danger: '#FAFAFA',
+  dangerSoft: '#1F1F1F',
+  success: '#FAFAFA',
+  warning: '#A3A3A3',
+  pin: '#FAFAFA',
+  overlay: 'rgba(0, 0, 0, 0.72)',
+  glassBackground: 'rgba(16, 16, 16, 0.9)',
+  glassBorder: 'rgba(250, 250, 250, 0.12)',
+  tagBackground: '#1F1F1F',
+  tagText: '#D4D4D4',
+  searchBackground: '#141414',
 };
 
 export interface ThemeContextValue {
@@ -94,5 +106,5 @@ export const ThemeContext = createContext<ThemeContextValue>({
 
 export const useTheme = () => useContext(ThemeContext);
 
-export const getColors = (isDark: boolean) => isDark ? darkColors : lightColors;
+export const getColors = (isDark: boolean) => (isDark ? darkColors : lightColors);
 export { lightColors, darkColors };

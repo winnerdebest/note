@@ -1,18 +1,29 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-  TextInput, Platform, DeviceEventEmitter, ScrollView,
-  RefreshControl, StatusBar,
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  TouchableOpacity,
+  TextInput,
+  DeviceEventEmitter,
+  ScrollView,
+  RefreshControl,
+  StatusBar,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTheme } from '../../lib/theme';
-import { getLocalNotes, softDeleteLocalNote, togglePinLocalNote, Note } from '../../lib/db';
-import { supabase } from '../../lib/supabase';
+import {
+  getLocalNotes,
+  softDeleteLocalNote,
+  togglePinLocalNote,
+  Note,
+} from '../../lib/db';
 import { runSync, isOnline } from '../../lib/sync';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import * as Haptics from 'expo-haptics';
-import { Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-root-toast';
 
 export default function NotesListScreen() {
@@ -20,6 +31,7 @@ export default function NotesListScreen() {
   const router = useRouter();
   const [notes, setNotes] = useState<Note[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterMode, setFilterMode] = useState<'all' | 'pinned'>('all');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -27,20 +39,8 @@ export default function NotesListScreen() {
 
   const fetchNotes = useCallback(async () => {
     try {
-      if (Platform.OS === 'web') {
-        const { data: sessionData } = await supabase.auth.getSession();
-        if (sessionData.session) {
-          const { data } = await supabase
-            .from('notes').select('*')
-            .eq('user_id', sessionData.session.user.id)
-            .is('deleted_at', null)
-            .order('updated_at', { ascending: false });
-          if (data) setNotes(data as Note[]);
-        }
-      } else {
-        const local = await getLocalNotes();
-        setNotes(local);
-      }
+      const local = await getLocalNotes();
+      setNotes(local);
     } catch (err) {
       console.error('Fetch notes error:', err);
     }
@@ -48,19 +48,19 @@ export default function NotesListScreen() {
 
   useEffect(() => {
     fetchNotes();
-
-    // Check online status
     isOnline().then(setOnline);
 
     const syncStatusSub = DeviceEventEmitter.addListener('sync_status', (status: boolean) => {
       setIsSyncing(status);
     });
-    const syncCompleteSub = DeviceEventEmitter.addListener('sync_complete', () => {
+    // Listen to 'notes_updated' emitted by lib/sync.ts
+    const notesUpdatedSub = DeviceEventEmitter.addListener('notes_updated', () => {
       fetchNotes();
     });
+
     return () => {
       syncStatusSub.remove();
-      syncCompleteSub.remove();
+      notesUpdatedSub.remove();
     };
   }, [fetchNotes]);
 
@@ -75,53 +75,52 @@ export default function NotesListScreen() {
     await fetchNotes();
     setIsRefreshing(false);
     if (!networkOnline) {
-      Toast.show('You are offline. Showing local notes.', {
+      Toast.show('Offline mode — showing local notes', {
         duration: Toast.durations.SHORT,
         position: Toast.positions.BOTTOM,
-        backgroundColor: colors.warning,
-        textColor: '#FFF',
+        backgroundColor: colors.text,
+        textColor: colors.background,
       });
     }
   }, [fetchNotes, colors]);
 
   const handleDelete = async (id: string) => {
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-    if (Platform.OS === 'web') {
-      await supabase.from('notes').update({ deleted_at: new Date().toISOString() }).eq('id', id);
-    } else {
-      await softDeleteLocalNote(id);
-      runSync();
-    }
+    await softDeleteLocalNote(id);
+    runSync();
     fetchNotes();
     Toast.show('Moved to trash', {
       duration: Toast.durations.SHORT,
       position: Toast.positions.BOTTOM,
-      backgroundColor: colors.card,
-      textColor: colors.text,
-      shadow: true,
+      backgroundColor: colors.text,
+      textColor: colors.background,
     });
   };
 
   const handleTogglePin = async (note: Note) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    if (Platform.OS !== 'web') {
-      await togglePinLocalNote(note.id, !note.is_pinned);
-      runSync();
-    }
+    await togglePinLocalNote(note.id, !note.is_pinned);
+    runSync();
     fetchNotes();
   };
 
-  const allTags = Array.from(new Set(notes.flatMap(n => n.tags || []))).filter(Boolean);
+  const allTags = Array.from(new Set(notes.flatMap((n) => n.tags || []))).filter(Boolean);
+  const pinnedTotal = notes.filter((n) => n.is_pinned).length;
 
-  const filteredNotes = notes.filter(n => {
+  const filteredNotes = notes.filter((n) => {
     const q = searchQuery.toLowerCase();
-    const matchesSearch = !q || n.title.toLowerCase().includes(q) || n.content.toLowerCase().includes(q);
+    const matchesSearch =
+      !q ||
+      n.title.toLowerCase().includes(q) ||
+      n.content.toLowerCase().includes(q) ||
+      (n.tags || []).some((t) => t.toLowerCase().includes(q.replace(/^#/, '')));
     const matchesTag = !selectedTag || (n.tags || []).includes(selectedTag);
-    return matchesSearch && matchesTag;
+    const matchesPin = filterMode === 'all' || n.is_pinned;
+    return matchesSearch && matchesTag && matchesPin;
   });
 
-  const pinnedNotes = filteredNotes.filter(n => n.is_pinned);
-  const unpinnedNotes = filteredNotes.filter(n => !n.is_pinned);
+  const pinnedNotes = filteredNotes.filter((n) => n.is_pinned);
+  const unpinnedNotes = filteredNotes.filter((n) => !n.is_pinned);
   const displayNotes = [...pinnedNotes, ...unpinnedNotes];
 
   const formatDate = (dateStr: string) => {
@@ -132,87 +131,126 @@ export default function NotesListScreen() {
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(diff / 86400000);
     if (mins < 1) return 'Just now';
-    if (mins < 60) return `${mins}m ago`;
-    if (hours < 24) return `${hours}h ago`;
+    if (mins < 60) return `${mins}m`;
+    if (hours < 24) return `${hours}h`;
     if (days === 1) return 'Yesterday';
-    if (days < 7) return `${days}d ago`;
+    if (days < 7) return `${days}d`;
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
-  const stripHtml = (html: string) =>
-    html.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+  // Strip both HTML tags and Markdown syntax (**bold**, `code`, ## Heading, - [ ]) for clean preview
+  const getCleanPreview = (raw: string) => {
+    if (!raw) return '';
+    return raw
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/^#+\s+/gm, '')
+      .replace(/^\s*[-*]\s+\[[ xX]\]\s+/gm, '✓ ')
+      .replace(/[#*_~`>\-\[\]]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  };
 
   const renderRightActions = (item: Note) => () => (
     <TouchableOpacity
-      style={[styles.swipeAction, { backgroundColor: colors.danger }]}
+      style={[
+        styles.swipeAction,
+        { backgroundColor: colors.surfaceContainer, borderColor: colors.border },
+      ]}
       onPress={() => handleDelete(item.id)}
     >
-      <Ionicons name="trash" size={22} color="#FFF" />
-      <Text style={styles.swipeLabel}>Trash</Text>
+      <Feather name="trash-2" size={18} color={colors.text} />
+      <Text style={[styles.swipeLabel, { color: colors.text }]}>Trash</Text>
     </TouchableOpacity>
   );
 
   const renderLeftActions = (item: Note) => () => (
     <TouchableOpacity
-      style={[styles.swipeAction, styles.leftAction, { backgroundColor: item.is_pinned ? colors.textMuted : colors.accent }]}
+      style={[
+        styles.swipeAction,
+        styles.leftAction,
+        { backgroundColor: colors.accent },
+      ]}
       onPress={() => handleTogglePin(item)}
     >
-      <Ionicons name={item.is_pinned ? 'pin' : 'pin-outline'} size={22} color="#FFF" />
-      <Text style={styles.swipeLabel}>{item.is_pinned ? 'Unpin' : 'Pin'}</Text>
+      <Ionicons
+        name={item.is_pinned ? 'pin-outline' : 'pin'}
+        size={18}
+        color={colors.accentText}
+      />
+      <Text style={[styles.swipeLabel, { color: colors.accentText }]}>
+        {item.is_pinned ? 'Unpin' : 'Pin'}
+      </Text>
     </TouchableOpacity>
   );
 
-  const renderItem = ({ item, index }: { item: Note; index: number }) => (
-    <Swipeable
-      renderRightActions={renderRightActions(item)}
-      renderLeftActions={renderLeftActions(item)}
-      overshootRight={false}
-      overshootLeft={false}
-    >
-      <TouchableOpacity
-        style={[
-          styles.noteCard,
-          {
-            backgroundColor: item.is_pinned ? colors.accentSoft : colors.card,
-            borderColor: item.is_pinned ? colors.accent + '30' : colors.border,
-          }
-        ]}
-        onPress={() => router.push(`/notes/${item.id}`)}
-        activeOpacity={0.75}
+  const renderItem = ({ item }: { item: Note }) => {
+    const preview = getCleanPreview(item.content);
+    return (
+      <Swipeable
+        renderRightActions={renderRightActions(item)}
+        renderLeftActions={renderLeftActions(item)}
+        overshootRight={false}
+        overshootLeft={false}
       >
-        {item.is_pinned && (
-          <View style={[styles.pinnedBadge, { backgroundColor: colors.accent }]}>
-            <Ionicons name="pin" size={10} color="#FFF" />
+        <TouchableOpacity
+          style={[
+            styles.noteCard,
+            {
+              backgroundColor: colors.card,
+              borderColor: item.is_pinned ? colors.text + '45' : colors.border,
+            },
+          ]}
+          onPress={() => router.push(`/notes/${item.id}`)}
+          activeOpacity={0.75}
+        >
+          <View style={styles.cardHeader}>
+            <View style={styles.titleRow}>
+              {item.is_pinned && (
+                <Ionicons
+                  name="pin"
+                  size={12}
+                  color={colors.text}
+                  style={{ marginRight: 5 }}
+                />
+              )}
+              <Text style={[styles.noteTitle, { color: colors.text }]} numberOfLines={1}>
+                {item.title || 'Untitled'}
+              </Text>
+            </View>
+            <Text style={[styles.noteDate, { color: colors.textMuted }]}>
+              {formatDate(item.updated_at)}
+            </Text>
           </View>
-        )}
-        <View style={styles.cardHeader}>
-          <Text style={[styles.noteTitle, { color: colors.text }]} numberOfLines={1}>
-            {item.title || 'Untitled'}
-          </Text>
-          <Text style={[styles.noteDate, { color: colors.textMuted }]}>
-            {formatDate(item.updated_at)}
-          </Text>
-        </View>
-        {stripHtml(item.content) ? (
+
           <Text style={[styles.noteContent, { color: colors.textSecondary }]} numberOfLines={2}>
-            {stripHtml(item.content)}
+            {preview || 'Empty note…'}
           </Text>
-        ) : null}
-        {item.tags && item.tags.length > 0 && (
-          <View style={styles.tagRow}>
-            {item.tags.slice(0, 3).map((tag, i) => (
-              <View key={i} style={[styles.tagChip, { backgroundColor: colors.tagBackground }]}>
-                <Text style={[styles.tagChipText, { color: colors.tagText }]}>#{tag}</Text>
-              </View>
-            ))}
-            {item.tags.length > 3 && (
-              <Text style={[styles.tagMore, { color: colors.textMuted }]}>+{item.tags.length - 3}</Text>
-            )}
-          </View>
-        )}
-      </TouchableOpacity>
-    </Swipeable>
-  );
+
+          {item.tags && item.tags.length > 0 && (
+            <View style={styles.tagRow}>
+              {item.tags.slice(0, 3).map((tag, i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.tagChip,
+                    { backgroundColor: colors.tagBackground, borderColor: colors.border },
+                  ]}
+                >
+                  <Text style={[styles.tagChipText, { color: colors.tagText }]}>#{tag}</Text>
+                </View>
+              ))}
+              {item.tags.length > 3 && (
+                <Text style={[styles.tagMore, { color: colors.textMuted }]}>
+                  +{item.tags.length - 3}
+                </Text>
+              )}
+            </View>
+          )}
+        </TouchableOpacity>
+      </Swipeable>
+    );
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
@@ -221,97 +259,174 @@ export default function NotesListScreen() {
         backgroundColor={colors.background}
       />
 
-      {/* Header */}
+      {/* Top Studio Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Notes</Text>
-          <View style={styles.headerMeta}>
-            {isSyncing ? (
-              <View style={[styles.statusPill, { backgroundColor: colors.accentSoft }]}>
-                <Ionicons name="sync" size={11} color={colors.accent} />
-                <Text style={[styles.statusText, { color: colors.accent }]}>Syncing</Text>
-              </View>
-            ) : !online ? (
-              <View style={[styles.statusPill, { backgroundColor: colors.dangerSoft }]}>
-                <Ionicons name="cloud-offline-outline" size={11} color={colors.danger} />
-                <Text style={[styles.statusText, { color: colors.danger }]}>Offline</Text>
-              </View>
-            ) : (
-              <View style={[styles.statusPill, { backgroundColor: colors.accentSoft }]}>
-                <Ionicons name="checkmark-circle" size={11} color={colors.success} />
-                <Text style={[styles.statusText, { color: colors.success }]}>Synced</Text>
-              </View>
-            )}
+          <View style={styles.brandRow}>
+            <View
+              style={[
+                styles.brandBadge,
+                { backgroundColor: colors.accent },
+              ]}
+            >
+              <Feather name="feather" size={12} color={colors.accentText} />
+            </View>
+            <Text style={[styles.headerTitle, { color: colors.text }]}>
+              Notes <Text style={[styles.byWinner, { color: colors.textMuted }]}>by Winner</Text>
+            </Text>
+          </View>
+
+          <View style={styles.statusRow}>
+            <View
+              style={[
+                styles.statusDot,
+                {
+                  backgroundColor: !online ? colors.textMuted : colors.text,
+                  opacity: isSyncing ? 0.45 : 1,
+                },
+              ]}
+            />
+            <Text style={[styles.statusText, { color: colors.textMuted }]}>
+              {isSyncing
+                ? 'Syncing…'
+                : !online
+                ? 'Offline ready'
+                : `Synced · ${notes.length} ${notes.length === 1 ? 'note' : 'notes'}`}
+            </Text>
           </View>
         </View>
+
         <View style={styles.headerRight}>
           <TouchableOpacity
             style={[styles.iconBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
             onPress={() => router.push('/notes/trash')}
+            accessibilityLabel="Trash"
           >
-            <Ionicons name="trash-outline" size={19} color={colors.textSecondary} />
+            <Feather name="trash-2" size={16} color={colors.textSecondary} />
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.iconBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
             onPress={() => router.push('/notes/settings')}
+            accessibilityLabel="Settings"
           >
-            <Ionicons name="person-circle-outline" size={19} color={colors.textSecondary} />
+            <Feather name="settings" size={16} color={colors.textSecondary} />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Search */}
-      <View style={[styles.searchBar, { backgroundColor: colors.searchBackground, borderColor: colors.border }]}>
-        <Ionicons name="search-outline" size={17} color={colors.textMuted} />
+      {/* Search Bar */}
+      <View
+        style={[
+          styles.searchBar,
+          { backgroundColor: colors.searchBackground, borderColor: colors.border },
+        ]}
+      >
+        <Feather name="search" size={15} color={colors.textMuted} />
         <TextInput
           style={[styles.searchInput, { color: colors.text }]}
-          placeholder="Search notes..."
+          placeholder="Search notes or #tags…"
           placeholderTextColor={colors.textMuted}
           value={searchQuery}
           onChangeText={setSearchQuery}
         />
         {searchQuery.length > 0 && (
           <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+            <Ionicons name="close-circle" size={17} color={colors.textMuted} />
           </TouchableOpacity>
         )}
       </View>
 
-      {/* Tag Filters */}
-      {allTags.length > 0 && (
+      {/* Filter Pills (All / Pinned / #tags) */}
+      <View>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tagScroll}
+          contentContainerStyle={styles.filterScroll}
         >
           <TouchableOpacity
-            style={[styles.filterPill, { backgroundColor: !selectedTag ? colors.accent : colors.surface, borderColor: !selectedTag ? colors.accent : colors.border }]}
-            onPress={() => setSelectedTag(null)}
+            style={[
+              styles.filterPill,
+              {
+                backgroundColor:
+                  filterMode === 'all' && !selectedTag ? colors.accent : colors.surface,
+                borderColor:
+                  filterMode === 'all' && !selectedTag ? colors.accent : colors.border,
+              },
+            ]}
+            onPress={() => {
+              setFilterMode('all');
+              setSelectedTag(null);
+            }}
           >
-            <Ionicons name="apps-outline" size={12} color={!selectedTag ? '#FFF' : colors.textSecondary} />
-            <Text style={[styles.filterPillText, { color: !selectedTag ? '#FFF' : colors.textSecondary }]}>All</Text>
-          </TouchableOpacity>
-          {allTags.map(tag => (
-            <TouchableOpacity
-              key={tag}
-              style={[styles.filterPill, { backgroundColor: selectedTag === tag ? colors.accent : colors.tagBackground, borderColor: selectedTag === tag ? colors.accent : 'transparent' }]}
-              onPress={() => setSelectedTag(selectedTag === tag ? null : tag)}
+            <Text
+              style={[
+                styles.filterPillText,
+                {
+                  color:
+                    filterMode === 'all' && !selectedTag
+                      ? colors.accentText
+                      : colors.textSecondary,
+                },
+              ]}
             >
-              <Text style={[styles.filterPillText, { color: selectedTag === tag ? '#FFF' : colors.tagText }]}>#{tag}</Text>
-            </TouchableOpacity>
-          ))}
+              All ({notes.length})
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterPill,
+              {
+                backgroundColor: filterMode === 'pinned' ? colors.accent : colors.surface,
+                borderColor: filterMode === 'pinned' ? colors.accent : colors.border,
+              },
+            ]}
+            onPress={() => setFilterMode(filterMode === 'pinned' ? 'all' : 'pinned')}
+          >
+            <Text
+              style={[
+                styles.filterPillText,
+                {
+                  color: filterMode === 'pinned' ? colors.accentText : colors.textSecondary,
+                },
+              ]}
+            >
+              Pinned ({pinnedTotal})
+            </Text>
+          </TouchableOpacity>
+
+          {allTags.map((tag) => {
+            const active = selectedTag === tag;
+            return (
+              <TouchableOpacity
+                key={tag}
+                style={[
+                  styles.filterPill,
+                  {
+                    backgroundColor: active ? colors.accent : colors.surface,
+                    borderColor: active ? colors.accent : colors.border,
+                  },
+                ]}
+                onPress={() => setSelectedTag(active ? null : tag)}
+              >
+                <Text
+                  style={[
+                    styles.filterPillText,
+                    { color: active ? colors.accentText : colors.textSecondary },
+                  ]}
+                >
+                  #{tag}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
-      )}
+      </View>
 
-      {/* Section label */}
-      {pinnedNotes.length > 0 && !selectedTag && !searchQuery && (
-        <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>PINNED</Text>
-      )}
-
-      {/* List */}
+      {/* Notes Feed */}
       <FlatList
         data={displayNotes}
-        keyExtractor={item => item.id}
+        keyExtractor={(item) => item.id}
         renderItem={renderItem}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
@@ -319,27 +434,42 @@ export default function NotesListScreen() {
           <RefreshControl
             refreshing={isRefreshing}
             onRefresh={handleRefresh}
-            tintColor={colors.accent}
-            colors={[colors.accent]}
+            tintColor={colors.text}
+            colors={[colors.text]}
             progressBackgroundColor={colors.card}
           />
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <View style={[styles.emptyIcon, { backgroundColor: colors.accentSoft }]}>
-              <Ionicons name={searchQuery ? 'search-outline' : 'document-text-outline'} size={36} color={colors.accent} />
+            <View
+              style={[
+                styles.emptyIcon,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+              ]}
+            >
+              <Feather
+                name={searchQuery ? 'search' : 'file-text'}
+                size={24}
+                color={colors.textMuted}
+              />
             </View>
             <Text style={[styles.emptyTitle, { color: colors.text }]}>
-              {searchQuery ? 'No results found' : 'No notes yet'}
+              {searchQuery
+                ? 'No matching notes'
+                : filterMode === 'pinned'
+                ? 'No pinned notes yet'
+                : 'Your notebook is empty'}
             </Text>
             <Text style={[styles.emptySub, { color: colors.textMuted }]}>
-              {searchQuery ? 'Try a different keyword' : 'Pull down to sync, or tap + to create'}
+              {searchQuery
+                ? 'Try a different keyword or #tag'
+                : 'Pull down to sync or tap + to start writing'}
             </Text>
           </View>
         }
       />
 
-      {/* FAB */}
+      {/* Monochrome Floating Action Button */}
       <TouchableOpacity
         style={[styles.fab, { backgroundColor: colors.accent }]}
         onPress={async () => {
@@ -347,8 +477,9 @@ export default function NotesListScreen() {
           router.push('/notes/new');
         }}
         activeOpacity={0.85}
+        accessibilityLabel="New note"
       >
-        <Ionicons name="add" size={30} color="#FFF" />
+        <Feather name="plus" size={24} color={colors.accentText} />
       </TouchableOpacity>
     </SafeAreaView>
   );
@@ -361,30 +492,51 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingTop: 6,
+    paddingTop: 8,
     paddingBottom: 14,
   },
   headerLeft: { gap: 4 },
-  headerTitle: {
-    fontSize: 30,
-    fontWeight: '800',
-    letterSpacing: -0.8,
-  },
-  headerMeta: { flexDirection: 'row' },
-  statusPill: {
+  brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 20,
+    gap: 8,
   },
-  statusText: { fontSize: 11, fontWeight: '600' },
+  brandBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    letterSpacing: -0.6,
+  },
+  byWinner: {
+    fontSize: 15,
+    fontWeight: '400',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 2,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
   headerRight: { flexDirection: 'row', gap: 8 },
   iconBtn: {
     width: 38,
     height: 38,
-    borderRadius: 12,
+    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
@@ -394,68 +546,44 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: 20,
     marginBottom: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderRadius: 16,
+    paddingHorizontal: 13,
+    height: 42,
+    borderRadius: 12,
     borderWidth: 1,
-    gap: 10,
+    gap: 9,
   },
   searchInput: {
     flex: 1,
-    fontSize: 15,
+    fontSize: 14,
     padding: 0,
   },
-  tagScroll: {
+  filterScroll: {
     paddingHorizontal: 20,
     paddingBottom: 12,
-    gap: 8,
+    gap: 6,
     flexDirection: 'row',
   },
   filterPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 20,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+    borderRadius: 8,
     borderWidth: 1,
     marginRight: 6,
   },
-  filterPillText: { fontSize: 14, fontWeight: '500' },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    paddingHorizontal: 20,
-    marginBottom: 6,
+  filterPillText: {
+    fontSize: 12,
+    fontWeight: '600',
   },
   list: {
     paddingHorizontal: 20,
-    paddingTop: 4,
+    paddingTop: 2,
     paddingBottom: 110,
   },
   noteCard: {
-    padding: 16,
-    borderRadius: 18,
+    padding: 15,
+    borderRadius: 14,
     borderWidth: 1,
     marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    elevation: 1,
-    overflow: 'hidden',
-  },
-  pinnedBadge: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    width: 22,
-    height: 22,
-    borderBottomLeftRadius: 10,
-    borderTopRightRadius: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -463,69 +591,102 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 5,
   },
-  noteTitle: {
-    fontSize: 15,
-    fontWeight: '700',
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     flex: 1,
     marginRight: 8,
   },
-  noteDate: { fontSize: 11, fontWeight: '500' },
+  noteTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    flexShrink: 1,
+    letterSpacing: -0.2,
+  },
+  noteDate: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
   noteContent: {
     fontSize: 13,
     lineHeight: 19,
-    marginBottom: 8,
   },
   tagRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 5,
-    marginTop: 2,
+    marginTop: 10,
   },
   tagChip: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: 6,
+    borderWidth: 1,
   },
-  tagChipText: { fontSize: 11, fontWeight: '600' },
-  tagMore: { fontSize: 11, alignSelf: 'center' },
+  tagChipText: {
+    fontSize: 10,
+    fontWeight: '500',
+  },
+  tagMore: {
+    fontSize: 10,
+    alignSelf: 'center',
+  },
   swipeAction: {
     justifyContent: 'center',
     alignItems: 'center',
     width: 68,
     marginBottom: 10,
-    borderRadius: 18,
-    gap: 3,
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 4,
+    marginLeft: 8,
   },
-  leftAction: { marginRight: 8 },
-  swipeLabel: { color: '#FFF', fontSize: 10, fontWeight: '700' },
+  leftAction: {
+    marginLeft: 0,
+    marginRight: 8,
+    borderWidth: 0,
+  },
+  swipeLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+  },
   empty: {
     alignItems: 'center',
     paddingTop: 80,
-    gap: 10,
+    paddingHorizontal: 32,
+    gap: 8,
   },
   emptyIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 24,
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
-  emptyTitle: { fontSize: 18, fontWeight: '700' },
-  emptySub: { fontSize: 13, textAlign: 'center', lineHeight: 20 },
+  emptyTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  emptySub: {
+    fontSize: 13,
+    textAlign: 'center',
+    lineHeight: 19,
+  },
   fab: {
     position: 'absolute',
-    right: 22,
-    bottom: 34,
-    width: 58,
-    height: 58,
-    borderRadius: 29,
+    right: 20,
+    bottom: 28,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     justifyContent: 'center',
     alignItems: 'center',
-    elevation: 10,
-    shadowColor: '#6C63FF',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 14,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
   },
 });

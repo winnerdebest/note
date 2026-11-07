@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "Mindful Canva",
+    "name": "Notes by Winner",
     "slug": "mindful-canvas-app",
     "version": "1.0.0",
-    "scheme": "mindfulcanvas",
+    "scheme": "notesbywinner",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",

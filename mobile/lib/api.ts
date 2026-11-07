@@ -1,12 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform, DeviceEventEmitter } from 'react-native';
+import { DeviceEventEmitter } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
+import * as Linking from 'expo-linking';
 
-const DEFAULT_URL = Platform.select({
-  android: 'http://10.0.2.2:8000',
-  default: 'http://localhost:8000',
-});
+WebBrowser.maybeCompleteAuthSession();
 
-export const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || DEFAULT_URL;
+export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_URL || '').replace(/\/+$/, '');
+export const WEB_BASE_URL = (process.env.EXPO_PUBLIC_WEB_URL || '').replace(/\/+$/, '');
+export const GOOGLE_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || '';
 
 const TOKEN_KEY = 'mindfulcanvas_jwt_token';
 const USER_KEY = 'mindfulcanvas_user';
@@ -76,22 +77,61 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}) => {
   return response.json();
 };
 
-export const register = async (email: string, password: string): Promise<AuthResponse> => {
-  const data = await apiFetch('/api/v1/auth/register', {
-    method: 'POST',
-    body: JSON.stringify({ email, password }),
-  });
-  await setAuthSession(data.access_token, data.user);
-  return data;
+/**
+ * Option 1: Hosted Web Auth Bridge
+ * Opens the /mobile-auth bridge on the hosted web domain (e.g. https://notes.buildwithwinner.name.ng/mobile-auth)
+ * which runs Google OAuth on the authorized web origin and redirects back via deep link with the JWT + User.
+ */
+export const signInWithGoogleMobileBridge = async (): Promise<AuthResponse> => {
+  if (!WEB_BASE_URL) {
+    throw new Error('EXPO_PUBLIC_WEB_URL is not configured in .env');
+  }
+
+  const redirectUri = Linking.createURL('auth');
+  const authUrl = `${WEB_BASE_URL}/mobile-auth?redirect_uri=${encodeURIComponent(redirectUri)}`;
+
+  const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+
+  if (result.type !== 'success' || !result.url) {
+    throw new Error('Google sign-in was cancelled.');
+  }
+
+  return completeSessionFromRedirectUrl(result.url);
 };
 
-export const login = async (email: string, password: string): Promise<AuthResponse> => {
-  const data = await apiFetch('/api/v1/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email, password }),
-  });
-  await setAuthSession(data.access_token, data.user);
-  return data;
+export const completeSessionFromRedirectUrl = async (url: string): Promise<AuthResponse> => {
+  const parsed = Linking.parse(url);
+  const token = parsed.queryParams?.token as string | undefined;
+  const userRaw = parsed.queryParams?.user as string | undefined;
+
+  if (!token) {
+    throw new Error('Authentication token missing from redirect.');
+  }
+
+  let user: User | null = null;
+  if (userRaw) {
+    try {
+      user = JSON.parse(decodeURIComponent(userRaw));
+    } catch {
+      try {
+        user = JSON.parse(userRaw);
+      } catch {
+        user = null;
+      }
+    }
+  }
+
+  if (!user) {
+    await AsyncStorage.setItem(TOKEN_KEY, token);
+    user = await getMe();
+  }
+
+  await setAuthSession(token, user);
+  return {
+    access_token: token,
+    token_type: 'bearer',
+    user,
+  };
 };
 
 export const getMe = async (): Promise<User> => {
@@ -99,4 +139,10 @@ export const getMe = async (): Promise<User> => {
   await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
   await AsyncStorage.setItem('mindfulcanvas_cached_user_id', user.id);
   return user;
+};
+
+export const deleteRemoteNote = async (id: string, permanent = false) => {
+  return apiFetch(`/api/v1/notes/${id}?permanent=${permanent}`, {
+    method: 'DELETE',
+  });
 };

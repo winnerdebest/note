@@ -1,41 +1,65 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, ScrollView, Animated } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Alert,
+  ScrollView,
+  StatusBar,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTheme, ThemeMode } from '../../lib/theme';
 import { getStoredUser, clearAuthSession } from '../../lib/api';
 import { getLocalNotes, getTrashedNotes } from '../../lib/db';
+import { runSync } from '../../lib/sync';
 import * as Haptics from 'expo-haptics';
-import { Ionicons } from '@expo/vector-icons';
+import { Feather, Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-root-toast';
 
 export default function SettingsScreen() {
   const { colors, isDark, themeMode, setThemeMode } = useTheme();
   const router = useRouter();
   const [userEmail, setUserEmail] = useState('');
-  const [userProvider, setUserProvider] = useState('Email');
+  const [userId, setUserId] = useState('');
   const [stats, setStats] = useState({ total: 0, trashed: 0 });
+  const [syncingNow, setSyncingNow] = useState(false);
 
   useEffect(() => {
-    const loadUser = async () => {
+    const loadUserAndStats = async () => {
       const user = await getStoredUser();
       if (user) {
         setUserEmail(user.email || '');
+        setUserId(user.id || '');
       }
-    };
-    const loadStats = async () => {
       const total = await getLocalNotes();
       const trashed = await getTrashedNotes();
       setStats({ total: total.length, trashed: trashed.length });
     };
-    loadUser();
-    loadStats();
+    loadUserAndStats();
   }, []);
+
+  const handleManualSync = async () => {
+    setSyncingNow(true);
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await runSync();
+    const total = await getLocalNotes();
+    const trashed = await getTrashedNotes();
+    setStats({ total: total.length, trashed: trashed.length });
+    setSyncingNow(false);
+    Toast.show('Workspace synced', {
+      duration: Toast.durations.SHORT,
+      position: Toast.positions.BOTTOM,
+      backgroundColor: colors.text,
+      textColor: colors.background,
+    });
+  };
 
   const handleLogout = () => {
     Alert.alert(
       'Sign Out',
-      'Are you sure you want to sign out? Your local notes will remain on this device.',
+      'Sign out of Notes by Winner on this device?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -52,145 +76,184 @@ export default function SettingsScreen() {
   };
 
   const themeOptions: { label: string; value: ThemeMode; icon: string }[] = [
-    { label: 'Light', value: 'light', icon: 'sunny' },
-    { label: 'Dark', value: 'dark', icon: 'moon' },
-    { label: 'System', value: 'system', icon: 'settings' },
+    { label: 'Light (Paper)', value: 'light', icon: 'sun' },
+    { label: 'Dark (Ink)', value: 'dark', icon: 'moon' },
+    { label: 'System', value: 'system', icon: 'smartphone' },
   ];
-
-  const SettingRow = ({
-    icon, label, value, onPress, danger, right, noBorder
-  }: {
-    icon: string;
-    label: string;
-    value?: string;
-    onPress?: () => void;
-    danger?: boolean;
-    right?: React.ReactNode;
-    noBorder?: boolean;
-  }) => (
-    <TouchableOpacity
-      style={[
-        styles.settingRow,
-        { borderBottomColor: colors.border, borderBottomWidth: noBorder ? 0 : 1 }
-      ]}
-      onPress={onPress}
-      activeOpacity={onPress ? 0.7 : 1}
-    >
-      <View style={[styles.settingIcon, { backgroundColor: danger ? colors.dangerSoft : colors.accentSoft }]}>
-        <Ionicons name={icon as any} size={20} color={danger ? colors.danger : colors.accent} />
-      </View>
-      <View style={styles.settingContent}>
-        <Text style={[styles.settingLabel, { color: danger ? colors.danger : colors.text }]}>{label}</Text>
-        {value && <Text style={[styles.settingValue, { color: colors.textMuted }]}>{value}</Text>}
-      </View>
-      {right || (onPress && <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />)}
-    </TouchableOpacity>
-  );
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <Ionicons name="chevron-back" size={24} color={colors.accent} />
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.background}
+      />
+
+      {/* Studio Top Bar */}
+      <View style={[styles.header, { borderBottomColor: colors.border }]}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          style={[styles.backBtn, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        >
+          <Feather name="arrow-left" size={15} color={colors.text} />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: colors.text }]}>Settings</Text>
-        <View style={{ width: 44 }} />
+        <Text style={[styles.headerTitle, { color: colors.text }]}>Workspace Settings</Text>
+        <View style={{ width: 36 }} />
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
-        {/* Profile Card */}
-        <View style={[styles.profileCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={[styles.avatar, { backgroundColor: colors.accent }]}>
-            <Text style={styles.avatarText}>{userEmail ? userEmail[0].toUpperCase() : '?'}</Text>
-          </View>
-          <View style={styles.profileInfo}>
-            <Text style={[styles.profileEmail, { color: colors.text }]} numberOfLines={1}>{userEmail || 'User'}</Text>
-            <View style={[styles.providerBadge, { backgroundColor: colors.accentSoft }]}>
-              <Text style={[styles.providerText, { color: colors.accent }]}>{userProvider} Account</Text>
+        {/* 01 / Account */}
+        <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>01 / ACCOUNT</Text>
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <View style={styles.profileRow}>
+            <View
+              style={[
+                styles.avatar,
+                { backgroundColor: colors.surface, borderColor: colors.border },
+              ]}
+            >
+              <Feather name="user" size={18} color={colors.text} />
+            </View>
+            <View style={styles.profileInfo}>
+              <Text style={[styles.profileEmail, { color: colors.text }]} numberOfLines={1}>
+                {userEmail || 'Personal Workspace'}
+              </Text>
+              <View style={styles.syncBadgeRow}>
+                <View style={[styles.syncDot, { backgroundColor: colors.text }]} />
+                <Text style={[styles.syncBadgeText, { color: colors.textMuted }]}>
+                  Google Account · Synced across Web & Android
+                </Text>
+              </View>
             </View>
           </View>
-        </View>
 
-        {/* Stats Grid */}
-        <View style={styles.statsGrid}>
-          <View style={[styles.statBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.statValue, { color: colors.text }]}>{stats.total}</Text>
-            <Text style={[styles.statLabel, { color: colors.textMuted }]}>Notes</Text>
-          </View>
-          <View style={[styles.statBox, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.statValue, { color: colors.text }]}>{stats.trashed}</Text>
-            <Text style={[styles.statLabel, { color: colors.textMuted }]}>Trashed</Text>
-          </View>
-        </View>
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-        <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>APPEARANCE</Text>
-        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.themeSelector}>
-            {themeOptions.map(opt => (
-              <TouchableOpacity
-                key={opt.value}
-                style={[
-                  styles.themeOption,
-                  {
-                    backgroundColor: themeMode === opt.value ? colors.accent : 'transparent',
-                    borderColor: themeMode === opt.value ? colors.accent : colors.border,
-                  }
-                ]}
-                onPress={async () => {
-                  await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  setThemeMode(opt.value);
-                }}
+          <View style={styles.metaRow}>
+            <Text style={[styles.metaLabel, { color: colors.textMuted }]}>Active Notes</Text>
+            <Text style={[styles.metaValue, { color: colors.text }]}>{stats.total}</Text>
+          </View>
+          <View style={[styles.metaRow, { marginTop: 6 }]}>
+            <Text style={[styles.metaLabel, { color: colors.textMuted }]}>In Trash</Text>
+            <Text style={[styles.metaValue, { color: colors.text }]}>{stats.trashed}</Text>
+          </View>
+          {userId ? (
+            <View style={[styles.metaRow, { marginTop: 6 }]}>
+              <Text style={[styles.metaLabel, { color: colors.textMuted }]}>Account ID</Text>
+              <Text
+                style={[styles.metaValue, { color: colors.textMuted, maxWidth: 180 }]}
+                numberOfLines={1}
               >
-                <Ionicons 
-                  name={(themeMode === opt.value ? opt.icon : opt.icon + '-outline') as any} 
-                  size={20} 
-                  color={themeMode === opt.value ? '#FFF' : colors.textSecondary} 
-                />
-                <Text style={[
-                  styles.themeOptionText,
-                  { color: themeMode === opt.value ? '#FFF' : colors.textSecondary }
-                ]}>
-                  {opt.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                {userId}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+
+        {/* 02 / Appearance */}
+        <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>02 / APPEARANCE</Text>
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <View style={styles.themeGrid}>
+            {themeOptions.map((opt) => {
+              const active = themeMode === opt.value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[
+                    styles.themeCard,
+                    {
+                      backgroundColor: active ? colors.accent : colors.surface,
+                      borderColor: active ? colors.accent : colors.border,
+                    },
+                  ]}
+                  onPress={async () => {
+                    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setThemeMode(opt.value);
+                  }}
+                >
+                  <Feather
+                    name={opt.icon as any}
+                    size={16}
+                    color={active ? colors.accentText : colors.textSecondary}
+                  />
+                  <Text
+                    style={[
+                      styles.themeLabel,
+                      { color: active ? colors.accentText : colors.textSecondary },
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
 
-        <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>STORAGE & SYNC</Text>
-        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <SettingRow 
-            icon="cloud-done-outline" 
-            label="Automatic Sync" 
-            right={<Text style={{ color: colors.success, fontSize: 13, fontWeight: '700' }}>ENABLED</Text>}
-          />
-          <SettingRow 
-            icon="trash-bin-outline" 
-            label="Empty Trash" 
+        {/* 03 / Sync & Storage */}
+        <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>03 / SYNC & STORAGE</Text>
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.card, borderColor: colors.border, paddingVertical: 6 },
+          ]}
+        >
+          <TouchableOpacity style={styles.rowItem} onPress={handleManualSync}>
+            <View style={styles.rowLeft}>
+              <Feather name="refresh-cw" size={15} color={colors.text} />
+              <Text style={[styles.rowLabel, { color: colors.text }]}>
+                {syncingNow ? 'Syncing now…' : 'Sync Workspace Now'}
+              </Text>
+            </View>
+            <Text style={[styles.rowRightLabel, { color: colors.textMuted }]}>Tap to sync</Text>
+          </TouchableOpacity>
+
+          <View style={[styles.rowDivider, { backgroundColor: colors.border }]} />
+
+          <TouchableOpacity
+            style={styles.rowItem}
             onPress={() => router.push('/notes/trash')}
-          />
-          <SettingRow 
-            icon="information-circle-outline" 
-            label="Version" 
-            value="1.0.0 (Premium)" 
-            noBorder
-          />
+          >
+            <View style={styles.rowLeft}>
+              <Feather name="trash-2" size={15} color={colors.text} />
+              <Text style={[styles.rowLabel, { color: colors.text }]}>Manage Trash</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={15} color={colors.textMuted} />
+          </TouchableOpacity>
         </View>
 
-        <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>ACCOUNT</Text>
-        <View style={[styles.section, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <SettingRow 
-            icon="log-out-outline" 
-            label="Sign Out" 
-            danger 
-            onPress={handleLogout}
-            noBorder
-          />
-        </View>
+        {/* Sign Out */}
+        <TouchableOpacity
+          style={[
+            styles.signOutBtn,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+          onPress={handleLogout}
+          activeOpacity={0.8}
+        >
+          <Feather name="log-out" size={15} color={colors.text} />
+          <Text style={[styles.signOutText, { color: colors.text }]}>
+            Sign Out of Workspace
+          </Text>
+        </TouchableOpacity>
 
+        {/* Footer */}
         <View style={styles.footer}>
-          <Text style={[styles.footerText, { color: colors.textMuted }]}>Mindful Canvas</Text>
-          <Text style={[styles.footerSub, { color: colors.textMuted + '80' }]}>Built for your peace of mind</Text>
+          <Text style={[styles.footerBrand, { color: colors.text }]}>
+            Notes <Text style={{ color: colors.textMuted, fontWeight: '400' }}>by Winner</Text>
+          </Text>
+          <Text style={[styles.footerSub, { color: colors.textMuted }]}>
+            Version 1.0.0 · Web & Android
+          </Text>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -203,159 +266,155 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 14,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
   },
   backBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: -0.5,
+    fontSize: 15,
+    fontWeight: '600',
+    letterSpacing: -0.2,
   },
   scroll: {
     paddingHorizontal: 20,
+    paddingTop: 22,
     paddingBottom: 40,
   },
-  profileCard: {
+  sectionTitle: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 1.2,
+    marginBottom: 8,
+    marginLeft: 2,
+  },
+  card: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    marginBottom: 22,
+  },
+  profileRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
-    borderRadius: 24,
-    borderWidth: 1,
-    marginBottom: 20,
-    gap: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 2,
+    gap: 12,
   },
   avatar: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  avatarText: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#FFF',
   },
   profileInfo: {
     flex: 1,
-    gap: 4,
+    gap: 3,
   },
   profileEmail: {
-    fontSize: 18,
-    fontWeight: '700',
-    letterSpacing: -0.5,
+    fontSize: 15,
+    fontWeight: '600',
   },
-  providerBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  providerText: {
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-  },
-  statsGrid: {
+  syncBadgeRow: {
     flexDirection: 'row',
-    gap: 12,
-    marginBottom: 32,
-  },
-  statBox: {
-    flex: 1,
-    padding: 16,
-    borderRadius: 20,
-    borderWidth: 1,
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
   },
-  statValue: {
-    fontSize: 20,
-    fontWeight: '800',
+  syncDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
-  statLabel: {
+  syncBadgeText: {
+    fontSize: 11,
+  },
+  divider: {
+    height: 1,
+    marginVertical: 14,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  metaLabel: {
+    fontSize: 12,
+  },
+  metaValue: {
     fontSize: 12,
     fontWeight: '600',
   },
-  sectionTitle: {
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1.5,
-    marginBottom: 10,
-    marginLeft: 4,
+  themeGrid: {
+    flexDirection: 'row',
+    gap: 8,
   },
-  section: {
-    borderRadius: 24,
+  themeCard: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 6,
+    borderRadius: 12,
     borderWidth: 1,
-    overflow: 'hidden',
-    marginBottom: 24,
+    gap: 7,
   },
-  settingRow: {
+  themeLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  rowItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    gap: 14,
+    justifyContent: 'space-between',
+    paddingVertical: 12,
   },
-  settingIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    justifyContent: 'center',
+  rowLeft: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
   },
-  settingContent: { flex: 1 },
-  settingLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  settingValue: {
+  rowLabel: {
     fontSize: 13,
     fontWeight: '500',
-    marginTop: 2,
   },
-  themeSelector: {
-    flexDirection: 'row',
-    padding: 8,
-    gap: 8,
+  rowRightLabel: {
+    fontSize: 11,
   },
-  themeOption: {
-    flex: 1,
+  rowDivider: {
+    height: 1,
+  },
+  signOutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: 16,
-    borderWidth: 1,
     gap: 8,
+    paddingVertical: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 4,
   },
-  themeOptionText: {
+  signOutText: {
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   footer: {
     alignItems: 'center',
-    marginTop: 20,
+    marginTop: 28,
     gap: 4,
   },
-  footerText: {
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: -0.5,
+  footerBrand: {
+    fontSize: 13,
+    fontWeight: '600',
   },
   footerSub: {
-    fontSize: 12,
-    fontWeight: '500',
+    fontSize: 11,
   },
 });
