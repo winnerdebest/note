@@ -568,12 +568,7 @@ export default function LandingPage() {
                 {/* Download Buttons */}
                 <div className="mt-8 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                   <a
-                    href="/notes-by-winner.apk"
-                    download
-                    onClick={(e) => {
-                      e.preventDefault();
-                      openAuth('register');
-                    }}
+                    href={process.env.NEXT_PUBLIC_APK_DOWNLOAD_URL || '/download/android'}
                     className="lp-btn lp-btn-ink !h-11 !px-5 justify-center"
                   >
                     <Download size={15} aria-hidden="true" />
