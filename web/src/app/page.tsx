@@ -20,6 +20,7 @@ import {
 import { getToken, getMe, signInWithGooglePopup } from '@/lib/api';
 import AppPreview from '@/components/landing/AppPreview';
 import AuthModal from '@/components/landing/AuthModal';
+import DownloadApkModal from '@/components/landing/DownloadApkModal';
 import Reveal from '@/components/landing/Reveal';
 
 const SHORTCUTS = [
@@ -57,6 +58,7 @@ export default function LandingPage() {
   const [activeShortcut, setActiveShortcut] = useState<string>('new');
   const [quickGoogleLoading, setQuickGoogleLoading] = useState(false);
   const [mobileAuthRedirectUrl, setMobileAuthRedirectUrl] = useState<string | null>(null);
+  const [apkModalOpen, setApkModalOpen] = useState(false);
 
   useEffect(() => {
     const winRedirect = (window as any).__MOBILE_AUTH_REDIRECT__;
@@ -567,13 +569,14 @@ export default function LandingPage() {
 
                 {/* Download Buttons */}
                 <div className="mt-8 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-                  <a
-                    href={process.env.NEXT_PUBLIC_APK_DOWNLOAD_URL || '/download/android'}
-                    className="lp-btn lp-btn-ink !h-11 !px-5 justify-center"
+                  <button
+                    type="button"
+                    onClick={() => setApkModalOpen(true)}
+                    className="lp-btn lp-btn-ink !h-11 !px-5 justify-center cursor-pointer"
                   >
                     <Download size={15} aria-hidden="true" />
                     <span>Download Android APK (Sideload)</span>
-                  </a>
+                  </button>
                   <span
                     aria-disabled="true"
                     className="lp-btn lp-btn-outline !h-11 !px-5 bg-neutral-50 text-neutral-400 border-neutral-200 cursor-not-allowed justify-center"
@@ -859,13 +862,14 @@ export default function LandingPage() {
                   </span>
                 </button>
 
-                <a
-                  href="#mobile-app"
-                  className="lp-btn lp-btn-outline !h-11 !px-5 bg-white"
+                <button
+                  type="button"
+                  onClick={() => setApkModalOpen(true)}
+                  className="lp-btn lp-btn-outline !h-11 !px-5 bg-white cursor-pointer"
                 >
                   <Smartphone size={15} aria-hidden="true" />
                   <span>Get Android APK</span>
-                </a>
+                </button>
               </div>
             </div>
           </Reveal>
@@ -902,6 +906,11 @@ export default function LandingPage() {
           </div>
         </div>
       </footer>
+
+      <DownloadApkModal
+        isOpen={apkModalOpen}
+        onClose={() => setApkModalOpen(false)}
+      />
 
       {authMode && (
         <AuthModal
