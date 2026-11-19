@@ -5,7 +5,15 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
-from app.schemas.user import UserRegister, UserLogin, GoogleAuthRequest, UserResponse, Token
+from app.schemas.user import (
+    UserRegister,
+    UserLogin,
+    GoogleAuthRequest,
+    UserResponse,
+    Token,
+    EncryptionKeyBundle,
+    EncryptionKeyUpdate,
+)
 from app.security import verify_password, get_password_hash, create_access_token, get_current_user
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
@@ -147,3 +155,36 @@ def google_auth(payload: GoogleAuthRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.get("/encryption", response_model=EncryptionKeyBundle)
+def get_encryption_bundle(current_user: User = Depends(get_current_user)):
+    return EncryptionKeyBundle(
+        encryption_salt=current_user.encryption_salt,
+        encryption_verifier=current_user.encryption_verifier,
+        wrapped_dek=current_user.wrapped_dek,
+        recovery_wrapped_dek=current_user.recovery_wrapped_dek,
+        e2ee_enabled=bool(current_user.wrapped_dek and current_user.encryption_salt),
+    )
+
+
+@router.put("/encryption", response_model=EncryptionKeyBundle)
+def update_encryption_bundle(
+    payload: EncryptionKeyUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    current_user.encryption_salt = payload.encryption_salt
+    current_user.encryption_verifier = payload.encryption_verifier
+    current_user.wrapped_dek = payload.wrapped_dek
+    if payload.recovery_wrapped_dek is not None:
+        current_user.recovery_wrapped_dek = payload.recovery_wrapped_dek
+    db.commit()
+    db.refresh(current_user)
+    return EncryptionKeyBundle(
+        encryption_salt=current_user.encryption_salt,
+        encryption_verifier=current_user.encryption_verifier,
+        wrapped_dek=current_user.wrapped_dek,
+        recovery_wrapped_dek=current_user.recovery_wrapped_dek,
+        e2ee_enabled=True,
+    )

@@ -1,5 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
+import { encryptNoteFields, decryptNoteFields } from './crypto';
 
 export interface Note {
   id: string;
@@ -12,6 +13,7 @@ export interface Note {
   tags: string[]; // parsed as array for the app, stored as string in sqlite
   deleted_at: string | null;
   sync_status?: 'pending' | 'synced'; // only in sqlite
+  isLocked?: boolean;
 }
 
 // In-memory fallback for web so we don't crash, but we won't use it
@@ -63,11 +65,15 @@ export const getLocalNotes = async (): Promise<Note[]> => {
   if (Platform.OS === 'web') return [];
   const db = getDb();
   const rows = await db.getAllAsync<any>('SELECT * FROM notes WHERE deleted_at IS NULL ORDER BY updated_at DESC');
-  return rows.map(row => ({
-    ...row,
-    is_pinned: row.is_pinned === 1,
-    tags: JSON.parse(row.tags),
-  }));
+  return Promise.all(
+    rows.map(row =>
+      decryptNoteFields({
+        ...row,
+        is_pinned: row.is_pinned === 1,
+        tags: JSON.parse(row.tags),
+      })
+    )
+  );
 };
 
 export const getLocalNote = async (id: string): Promise<Note | null> => {
@@ -75,16 +81,17 @@ export const getLocalNote = async (id: string): Promise<Note | null> => {
   const db = getDb();
   const row = await db.getFirstAsync<any>('SELECT * FROM notes WHERE id = ?', [id]);
   if (!row) return null;
-  return {
+  return decryptNoteFields({
     ...row,
     is_pinned: row.is_pinned === 1,
     tags: JSON.parse(row.tags),
-  };
+  });
 };
 
 export const upsertLocalNote = async (note: Note) => {
   if (Platform.OS === 'web') return;
   const db = getDb();
+  const secured = await encryptNoteFields(note);
   await db.runAsync(
     `INSERT INTO notes (id, title, content, is_pinned, created_at, updated_at, user_id, tags, deleted_at, sync_status) 
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -97,16 +104,16 @@ export const upsertLocalNote = async (note: Note) => {
        deleted_at = excluded.deleted_at,
        sync_status = excluded.sync_status`,
     [
-      note.id,
-      note.title,
-      note.content,
-      note.is_pinned ? 1 : 0,
-      note.created_at,
-      note.updated_at,
-      note.user_id,
-      JSON.stringify(note.tags),
-      note.deleted_at,
-      note.sync_status || 'pending',
+      secured.id,
+      secured.title,
+      secured.content,
+      secured.is_pinned ? 1 : 0,
+      secured.created_at,
+      secured.updated_at,
+      secured.user_id,
+      JSON.stringify(secured.tags),
+      secured.deleted_at,
+      secured.sync_status || 'pending',
     ]
   );
 };
@@ -159,11 +166,32 @@ export const getTrashedNotes = async (): Promise<Note[]> => {
   if (Platform.OS === 'web') return [];
   const db = getDb();
   const rows = await db.getAllAsync<any>('SELECT * FROM notes WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC');
-  return rows.map(row => ({
-    ...row,
-    is_pinned: row.is_pinned === 1,
-    tags: JSON.parse(row.tags),
-  }));
+  return Promise.all(
+    rows.map(row =>
+      decryptNoteFields({
+        ...row,
+        is_pinned: row.is_pinned === 1,
+        tags: JSON.parse(row.tags),
+      })
+    )
+  );
+};
+
+export const encryptAllLocalNotes = async () => {
+  if (Platform.OS === 'web') return;
+  const db = getDb();
+  const rows = await db.getAllAsync<any>('SELECT * FROM notes');
+  const now = new Date().toISOString();
+  for (const row of rows) {
+    const note: Note = {
+      ...row,
+      is_pinned: row.is_pinned === 1,
+      tags: JSON.parse(row.tags),
+      updated_at: now,
+      sync_status: 'pending',
+    };
+    await upsertLocalNote(note);
+  }
 };
 
 export const restoreLocalNote = async (id: string) => {

@@ -29,6 +29,14 @@ import * as Haptics from 'expo-haptics';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import Toast from 'react-native-root-toast';
 import { RichEditor, actions } from 'react-native-pell-rich-editor';
+import {
+  markdownToHtml,
+  htmlToMarkdown,
+  applySyntaxEnterContinuation,
+  toggleSyntaxFormat,
+  getChecklistStats,
+  FormatType,
+} from '../../lib/markdown';
 
 const generateId = () =>
   'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -36,77 +44,6 @@ const generateId = () =>
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
-
-/**
- * Bidirectional Markdown <-> Visual HTML converters so notes created on the
- * Web Studio and Android App render identically without raw ** or ` symbols.
- */
-function markdownToHtml(md: string): string {
-  if (!md || !md.trim()) return '';
-  // If already contains HTML block tags from previous mobile edits, return as-is
-  if (/<(p|div|h1|h2|h3|ul|ol|li|blockquote)\b/i.test(md)) {
-    return md;
-  }
-
-  const inline = (text: string) =>
-    text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*(.+?)\*/g, '<em>$1</em>');
-
-  return md
-    .split('\n')
-    .map((line) => {
-      if (/^###\s+/.test(line)) return `<h3>${inline(line.replace(/^###\s+/, ''))}</h3>`;
-      if (/^##\s+/.test(line)) return `<h2>${inline(line.replace(/^##\s+/, ''))}</h2>`;
-      if (/^#\s+/.test(line)) return `<h1>${inline(line.replace(/^#\s+/, ''))}</h1>`;
-      if (/^>\s?/.test(line)) return `<blockquote>${inline(line.replace(/^>\s?/, ''))}</blockquote>`;
-      const todo = line.match(/^\s*[-*]\s+\[([ xX])\]\s*(.*)$/);
-      if (todo) {
-        const checked = todo[1].toLowerCase() === 'x' ? 'checked' : '';
-        return `<div><input type="checkbox" ${checked}/> ${inline(todo[2])}</div>`;
-      }
-      const bullet = line.match(/^\s*[-*]\s+(.*)$/);
-      if (bullet) {
-        return `<ul><li>${inline(bullet[1])}</li></ul>`;
-      }
-      if (!line.trim()) return '<p><br/></p>';
-      return `<p>${inline(line)}</p>`;
-    })
-    .join('');
-}
-
-function htmlToMarkdown(html: string): string {
-  if (!html || !html.trim()) return '';
-  if (!/<[a-z][\s\S]*>/i.test(html)) return html;
-
-  const text = html
-    .replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '# $1\n')
-    .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '## $1\n')
-    .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '### $1\n')
-    .replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, '> $1\n')
-    .replace(/<(strong|b)[^>]*>([\s\S]*?)<\/\1>/gi, '**$2**')
-    .replace(/<(em|i)[^>]*>([\s\S]*?)<\/\1>/gi, '*$2*')
-    .replace(/<code[^>]*>([\s\S]*?)<\/code>/gi, '`$1`')
-    .replace(/<li[^>]*>\s*<input[^>]*checked[^>]*>\s*([\s\S]*?)<\/li>/gi, '- [x] $1\n')
-    .replace(/<li[^>]*>\s*<input[^>]*>\s*([\s\S]*?)<\/li>/gi, '- [ ] $1\n')
-    .replace(/<div[^>]*>\s*<input[^>]*checked[^>]*>\s*([\s\S]*?)<\/div>/gi, '- [x] $1\n')
-    .replace(/<div[^>]*>\s*<input[^>]*>\s*([\s\S]*?)<\/div>/gi, '- [ ] $1\n')
-    .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '- $1\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div)>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>');
-
-  return text.replace(/\n{3,}/g, '\n\n').trim();
-}
 
 export default function NoteEditorScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -126,10 +63,16 @@ export default function NoteEditorScreen() {
   const [userId, setUserId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [activeFormats, setActiveFormats] = useState<string[]>([]);
+  const [syntaxSelection, setSyntaxSelection] = useState<{ start: number; end: number }>({
+    start: 0,
+    end: 0,
+  });
 
   const richEditorRef = useRef<RichEditor>(null);
   const isEditorReadyRef = useRef(false);
   const visualHtmlRef = useRef('');
+  const syntaxSelectionRef = useRef(syntaxSelection);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const titleRef = useRef(title);
@@ -203,12 +146,171 @@ export default function NoteEditorScreen() {
     };
   }, [id, isNew]);
 
+  const injectEditorEnhancements = useCallback(() => {
+    if (!richEditorRef.current) return;
+    richEditorRef.current.injectJavascript(`
+      (function() {
+        var content = document.querySelector('#content .pell-content') || document.querySelector('[contenteditable="true"]');
+        if (!content) return;
+        content.setAttribute('autocapitalize', 'sentences');
+        content.setAttribute('autocorrect', 'on');
+        content.setAttribute('spellcheck', 'true');
+        content.autocapitalize = 'sentences';
+        content.autocorrect = true;
+        content.spellcheck = true;
+
+        if (window.__notesEnhanced) return;
+        window.__notesEnhanced = true;
+
+        function notifyChange() {
+          content.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        function createTaskEl(html, checked) {
+          var div = document.createElement('div');
+          div.className = 've-task';
+          div.setAttribute('data-task', 'true');
+          div.setAttribute('data-checked', checked ? 'true' : 'false');
+
+          var cb = document.createElement('button');
+          cb.type = 'button';
+          cb.contentEditable = 'false';
+          cb.className = 've-checkbox';
+
+          var txt = document.createElement('span');
+          txt.className = 've-task-text';
+          txt.innerHTML = html || '<br/>';
+
+          var acts = document.createElement('span');
+          acts.className = 've-task-actions';
+          acts.contentEditable = 'false';
+          acts.innerHTML = '<button type="button" class="ve-move-btn ve-move-up">▲</button><button type="button" class="ve-move-btn ve-move-down">▼</button>';
+
+          div.appendChild(cb);
+          div.appendChild(txt);
+          div.appendChild(acts);
+          return div;
+        }
+
+        function placeCaretAtEnd(el) {
+          var range = document.createRange();
+          range.selectNodeContents(el);
+          range.collapse(false);
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+
+        function getCurrentBlock() {
+          var sel = window.getSelection();
+          if (!sel || sel.rangeCount === 0) return null;
+          var node = sel.anchorNode;
+          while (node && node !== content) {
+            if (node.nodeType === 1 && node.parentNode === content) return node;
+            node = node.parentNode;
+          }
+          return null;
+        }
+
+        window.__toggleTaskBlock = function() {
+          content.focus();
+          var block = getCurrentBlock();
+          if (block && block.classList && block.classList.contains('ve-task')) {
+            var txtEl = block.querySelector('.ve-task-text') || block;
+            var p = document.createElement('p');
+            p.innerHTML = txtEl.innerHTML || '<br/>';
+            block.replaceWith(p);
+            placeCaretAtEnd(p);
+          } else {
+            var inner = (block && block.innerText && block.innerText.trim()) ? block.innerHTML : '<br/>';
+            var task = createTaskEl(inner, false);
+            if (block) {
+              block.replaceWith(task);
+            } else {
+              content.appendChild(task);
+            }
+            placeCaretAtEnd(task.querySelector('.ve-task-text'));
+          }
+          notifyChange();
+        };
+
+        content.addEventListener('click', function(e) {
+          var target = e.target;
+          if (!target || !target.classList) return;
+
+          if (target.classList.contains('ve-checkbox')) {
+            e.preventDefault();
+            e.stopPropagation();
+            var task = target.closest('.ve-task');
+            if (task) {
+              var next = task.getAttribute('data-checked') !== 'true';
+              task.setAttribute('data-checked', next ? 'true' : 'false');
+              notifyChange();
+            }
+            return;
+          }
+
+          if (target.classList.contains('ve-move-up')) {
+            e.preventDefault();
+            e.stopPropagation();
+            var taskUp = target.closest('.ve-task');
+            if (taskUp && taskUp.previousElementSibling) {
+              content.insertBefore(taskUp, taskUp.previousElementSibling);
+              notifyChange();
+            }
+            return;
+          }
+
+          if (target.classList.contains('ve-move-down')) {
+            e.preventDefault();
+            e.stopPropagation();
+            var taskDown = target.closest('.ve-task');
+            if (taskDown && taskDown.nextElementSibling) {
+              content.insertBefore(taskDown.nextElementSibling, taskDown);
+              notifyChange();
+            }
+            return;
+          }
+        });
+
+        content.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            var block = getCurrentBlock();
+            if (block && block.classList && block.classList.contains('ve-task')) {
+              e.preventDefault();
+              var txtEl = block.querySelector('.ve-task-text') || block;
+              var plain = (txtEl.textContent || '').replace(/\\u200B/g, '').trim();
+              if (!plain) {
+                var p = document.createElement('p');
+                p.innerHTML = '<br/>';
+                block.replaceWith(p);
+                placeCaretAtEnd(p);
+              } else {
+                var nextTask = createTaskEl('<br/>', false);
+                block.after(nextTask);
+                placeCaretAtEnd(nextTask.querySelector('.ve-task-text'));
+              }
+              notifyChange();
+            }
+          }
+        });
+      })();
+    `);
+  }, []);
+
   const handleEditorInitialized = useCallback(() => {
     isEditorReadyRef.current = true;
     if (visualHtmlRef.current && richEditorRef.current) {
       richEditorRef.current.setContentHTML(visualHtmlRef.current);
     }
-  }, []);
+    richEditorRef.current?.registerToolbar((items) => {
+      const normalized = (items || []).map((item) =>
+        typeof item === 'string' ? item : item.type
+      );
+      setActiveFormats(normalized);
+    });
+    setTimeout(injectEditorEnhancements, 80);
+  }, [injectEditorEnhancements]);
 
   const toggleEditorMode = async (nextShowSyntax: boolean) => {
     if (nextShowSyntax === showSyntax) return;
@@ -242,19 +344,36 @@ export default function NoteEditorScreen() {
   };
 
   // Formatting actions for our Keyboard-Docked Studio Bar (works in both Visual & Syntax modes!)
-  const applyFormat = async (
-    type: 'bold' | 'italic' | 'h2' | 'quote' | 'todo' | 'bullet' | 'code' | 'undo' | 'redo'
-  ) => {
+  const applyFormat = async (type: FormatType) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     if (!showSyntax && richEditorRef.current) {
-      const actionMap: Record<typeof type, string> = {
+      if (type === 'todo') {
+        richEditorRef.current.injectJavascript('window.__toggleTaskBlock && window.__toggleTaskBlock();');
+        return;
+      }
+
+      // Toggle off block-level formats (H2, Quote, Code) back to normal paragraph
+      if (type === 'h2' && activeFormats.includes(actions.heading2)) {
+        richEditorRef.current.sendAction(actions.setParagraph, 'result');
+        return;
+      }
+      if (type === 'quote' && activeFormats.includes(actions.blockquote)) {
+        richEditorRef.current.sendAction(actions.setParagraph, 'result');
+        return;
+      }
+      if (type === 'code' && activeFormats.includes(actions.code)) {
+        richEditorRef.current.sendAction(actions.setParagraph, 'result');
+        return;
+      }
+
+      const actionMap: Record<Exclude<FormatType, 'todo'>, string> = {
         bold: actions.setBold,
         italic: actions.setItalic,
         h2: actions.heading2,
         quote: actions.blockquote,
-        todo: actions.checkboxList,
         bullet: actions.insertBulletsList,
+        ordered: actions.insertOrderedList,
         code: actions.code,
         undo: actions.undo,
         redo: actions.redo,
@@ -263,36 +382,16 @@ export default function NoteEditorScreen() {
       return;
     }
 
-    // Syntax mode Markdown helpers
-    const current = contentRef.current;
-    let updated = current;
-    switch (type) {
-      case 'bold':
-        updated = `${current}${current.endsWith(' ') || !current ? '' : ' '}**bold**`;
-        break;
-      case 'italic':
-        updated = `${current}${current.endsWith(' ') || !current ? '' : ' '}*italic*`;
-        break;
-      case 'h2':
-        updated = `${current}${current && !current.endsWith('\n') ? '\n' : ''}## `;
-        break;
-      case 'quote':
-        updated = `${current}${current && !current.endsWith('\n') ? '\n' : ''}> `;
-        break;
-      case 'todo':
-        updated = `${current}${current && !current.endsWith('\n') ? '\n' : ''}- [ ] `;
-        break;
-      case 'bullet':
-        updated = `${current}${current && !current.endsWith('\n') ? '\n' : ''}- `;
-        break;
-      case 'code':
-        updated = `${current}${current.endsWith(' ') || !current ? '' : ' '}\`code\``;
-        break;
-      default:
-        break;
-    }
+    // Syntax mode Markdown helpers (toggles prefixes & wraps selections cleanly)
+    const { text: updated, selection: nextSel } = toggleSyntaxFormat(
+      contentRef.current,
+      syntaxSelectionRef.current,
+      type
+    );
     setContent(updated);
     contentRef.current = updated;
+    setSyntaxSelection(nextSel);
+    syntaxSelectionRef.current = nextSel;
   };
 
   const saveNote = useCallback(
@@ -414,7 +513,8 @@ export default function NoteEditorScreen() {
     const clean = content.trim();
     const words = clean ? clean.split(/\s+/).length : 0;
     const readMins = Math.max(1, Math.ceil(words / 200));
-    return { words, readMins };
+    const tasks = getChecklistStats(content);
+    return { words, readMins, tasks };
   }, [content]);
 
   return (
@@ -555,6 +655,9 @@ export default function NoteEditorScreen() {
             onChangeText={setTitle}
             multiline
             returnKeyType="next"
+            autoCapitalize="sentences"
+            autoCorrect={true}
+            spellCheck={true}
           />
 
           {/* Tags Row */}
@@ -608,6 +711,8 @@ export default function NoteEditorScreen() {
                   setContent(htmlToMarkdown(html));
                 }}
                 placeholder="Write it down…"
+                autoCapitalize="sentences"
+                autoCorrect={true}
                 editorStyle={{
                   backgroundColor: 'transparent',
                   contentCSSText: `
@@ -617,6 +722,72 @@ export default function NoteEditorScreen() {
                     color: ${colors.text};
                     padding: 0 0 80px 0;
                     caret-color: ${colors.text};
+                  `,
+                  cssText: `
+                    .ve-task {
+                      display: flex;
+                      align-items: flex-start;
+                      gap: 10px;
+                      padding: 6px 8px;
+                      margin: 4px 0;
+                      border-radius: 10px;
+                      background: ${isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'};
+                    }
+                    .ve-checkbox {
+                      width: 20px;
+                      height: 20px;
+                      min-width: 20px;
+                      margin-top: 3px;
+                      border-radius: 6px;
+                      border: 2px solid ${colors.textMuted};
+                      background: transparent;
+                      padding: 0;
+                      position: relative;
+                    }
+                    .ve-task[data-checked="true"] .ve-checkbox {
+                      background: ${colors.accent};
+                      border-color: ${colors.accent};
+                    }
+                    .ve-task[data-checked="true"] .ve-checkbox::after {
+                      content: "✓";
+                      position: absolute;
+                      inset: 0;
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+                      color: ${colors.accentText};
+                      font-size: 12px;
+                      font-weight: 700;
+                    }
+                    .ve-task-text {
+                      flex: 1;
+                      min-width: 0;
+                      outline: none;
+                    }
+                    .ve-task[data-checked="true"] .ve-task-text {
+                      text-decoration: line-through;
+                      opacity: 0.55;
+                    }
+                    .ve-task-actions {
+                      display: flex;
+                      align-items: center;
+                      gap: 4px;
+                      margin-top: 2px;
+                    }
+                    .ve-move-btn {
+                      border: 1px solid ${colors.border};
+                      background: ${colors.surface};
+                      color: ${colors.textSecondary};
+                      border-radius: 5px;
+                      width: 22px;
+                      height: 22px;
+                      font-size: 9px;
+                      line-height: 1;
+                      padding: 0;
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+                    }
                   `,
                   placeholderColor: colors.textMuted,
                 }}
@@ -630,13 +801,31 @@ export default function NoteEditorScreen() {
               placeholder="Raw Markdown syntax (**bold**, `code`, ## Heading)…"
               placeholderTextColor={colors.textMuted}
               value={content}
+              selection={syntaxSelection}
+              onSelectionChange={(e) => {
+                const sel = e.nativeEvent.selection;
+                setSyntaxSelection(sel);
+                syntaxSelectionRef.current = sel;
+              }}
               onChangeText={(val) => {
-                setContent(val);
-                contentRef.current = val;
+                const result = applySyntaxEnterContinuation(
+                  contentRef.current,
+                  val,
+                  syntaxSelectionRef.current.end
+                );
+                setContent(result.text);
+                contentRef.current = result.text;
+                if (typeof result.newCursor === 'number') {
+                  const nextSel = { start: result.newCursor, end: result.newCursor };
+                  setSyntaxSelection(nextSel);
+                  syntaxSelectionRef.current = nextSel;
+                }
               }}
               multiline
               textAlignVertical="top"
               autoCapitalize="sentences"
+              autoCorrect={true}
+              spellCheck={true}
             />
           )}
         </ScrollView>
@@ -657,54 +846,50 @@ export default function NoteEditorScreen() {
             keyboardShouldPersistTaps="always"
             contentContainerStyle={styles.formatBarContent}
           >
-            <TouchableOpacity
-              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-              onPress={() => applyFormat('bold')}
-            >
-              <Feather name="bold" size={15} color={colors.text} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-              onPress={() => applyFormat('italic')}
-            >
-              <Feather name="italic" size={15} color={colors.text} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-              onPress={() => applyFormat('h2')}
-            >
-              <Text style={[styles.formatBtnLabel, { color: colors.text }]}>H2</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-              onPress={() => applyFormat('todo')}
-            >
-              <Feather name="check-square" size={15} color={colors.text} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-              onPress={() => applyFormat('bullet')}
-            >
-              <Feather name="list" size={15} color={colors.text} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-              onPress={() => applyFormat('quote')}
-            >
-              <Text style={[styles.formatBtnLabel, { color: colors.text }]}>“ ”</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.formatBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-              onPress={() => applyFormat('code')}
-            >
-              <Feather name="code" size={15} color={colors.text} />
-            </TouchableOpacity>
+            {(
+              [
+                { key: 'bold', action: actions.setBold, icon: 'bold' as const },
+                { key: 'italic', action: actions.setItalic, icon: 'italic' as const },
+                { key: 'h2', action: actions.heading2, label: 'H2' },
+                { key: 'todo', action: 'todo', icon: 'check-square' as const },
+                { key: 'bullet', action: actions.insertBulletsList, icon: 'list' as const },
+                { key: 'ordered', action: actions.insertOrderedList, label: '1.' },
+                { key: 'quote', action: actions.blockquote, label: '“ ”' },
+                { key: 'code', action: actions.code, icon: 'code' as const },
+              ] as const
+            ).map((btn) => {
+              const isActive = !showSyntax && activeFormats.includes(btn.action);
+              return (
+                <TouchableOpacity
+                  key={btn.key}
+                  style={[
+                    styles.formatBtn,
+                    {
+                      borderColor: isActive ? colors.accent : colors.border,
+                      backgroundColor: isActive ? colors.accent : colors.card,
+                    },
+                  ]}
+                  onPress={() => applyFormat(btn.key)}
+                >
+                  {'icon' in btn ? (
+                    <Feather
+                      name={btn.icon}
+                      size={15}
+                      color={isActive ? colors.accentText : colors.text}
+                    />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.formatBtnLabel,
+                        { color: isActive ? colors.accentText : colors.text },
+                      ]}
+                    >
+                      {btn.label}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
 
             {!showSyntax && (
               <>
@@ -737,6 +922,7 @@ export default function NoteEditorScreen() {
           <View style={[styles.footerBar, { borderTopColor: colors.border, backgroundColor: colors.background }]}>
             <Text style={[styles.footerText, { color: colors.textMuted }]}>
               {stats.words} words · {stats.readMins} min read
+              {stats.tasks.total > 0 ? ` · ${stats.tasks.done}/${stats.tasks.total} tasks` : ''}
             </Text>
             <Text style={[styles.footerText, { color: colors.textMuted }]}>
               {isSaving ? 'Saving…' : showSyntax ? 'Syntax mode' : 'Visual · Auto-saved'}

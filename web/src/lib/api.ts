@@ -1,3 +1,5 @@
+import { encryptNoteFields, decryptNoteFields, KeyBundlePayload } from './crypto';
+
 const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/+$/, '');
 export const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 
@@ -209,12 +211,19 @@ export const mapToApiNote = (note: any) => ({
 export const fetchNotesApi = async (includeDeleted = false, search = '', tag = '') => {
   const params = new URLSearchParams();
   if (includeDeleted) params.set('include_deleted', 'true');
-  if (search) params.set('search', search);
-  
+  // Note: when E2EE is enabled, server-side search only sees ciphertext, so we filter client-side below too
   const endpoint = `/api/v1/notes${params.toString() ? `?${params.toString()}` : ''}`;
   const data = await apiFetch(endpoint);
-  
-  let notes = (data || []).map(mapFromApiNote);
+
+  let notes = await Promise.all((data || []).map((n: any) => decryptNoteFields(mapFromApiNote(n))));
+  if (search) {
+    const q = search.toLowerCase();
+    notes = notes.filter(
+      (n: any) =>
+        (n.title || '').toLowerCase().includes(q) ||
+        (n.content || '').toLowerCase().includes(q)
+    );
+  }
   if (tag) {
     notes = notes.filter((n: any) => n.tags?.includes(tag));
   }
@@ -222,21 +231,51 @@ export const fetchNotesApi = async (includeDeleted = false, search = '', tag = '
 };
 
 export const createNoteApi = async (note: any) => {
-  const body = mapToApiNote(note);
+  const secured = await encryptNoteFields({
+    title: note.title || '',
+    content: note.content || '',
+    tags: note.tags || [],
+  });
+  const body = mapToApiNote({ ...note, ...secured });
   const data = await apiFetch('/api/v1/notes', {
     method: 'POST',
     body: JSON.stringify(body),
   });
-  return mapFromApiNote(data);
+  return decryptNoteFields(mapFromApiNote(data));
 };
 
 export const updateNoteApi = async (id: string, note: any) => {
-  const body = mapToApiNote(note);
+  const secured = await encryptNoteFields({
+    title: note.title || '',
+    content: note.content || '',
+    tags: note.tags || [],
+  });
+  const body = mapToApiNote({ ...note, ...secured });
   const data = await apiFetch(`/api/v1/notes/${id}`, {
     method: 'PUT',
     body: JSON.stringify(body),
   });
-  return mapFromApiNote(data);
+  return decryptNoteFields(mapFromApiNote(data));
+};
+
+export const getEncryptionBundleApi = async () => {
+  return apiFetch('/api/v1/auth/encryption');
+};
+
+export const updateEncryptionBundleApi = async (bundle: KeyBundlePayload) => {
+  return apiFetch('/api/v1/auth/encryption', {
+    method: 'PUT',
+    body: JSON.stringify(bundle),
+  });
+};
+
+export const encryptAllWebNotesApi = async () => {
+  const all = await fetchNotesApi(true);
+  for (const n of all) {
+    if (!n.isLocked) {
+      await updateNoteApi(n.id, n);
+    }
+  }
 };
 
 export const deleteNoteApi = async (id: string, permanent = false) => {

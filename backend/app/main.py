@@ -1,17 +1,30 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 from app.config import settings
 from app.database import engine, Base
 from app.routers import auth_router, notes_router
 # Import models to ensure they are registered with Base.metadata
 import app.models
 
+def _ensure_e2ee_columns():
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("users")}
+    needed = ["encryption_salt", "encryption_verifier", "wrapped_dek", "recovery_wrapped_dek"]
+    with engine.begin() as conn:
+        for col in needed:
+            if col not in existing:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} TEXT"))
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Ensure database tables exist
     try:
         Base.metadata.create_all(bind=engine)
+        _ensure_e2ee_columns()
         print("Database tables verified / created successfully.")
     except Exception as e:
         print(f"Error creating database tables: {e}")

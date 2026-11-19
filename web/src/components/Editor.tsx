@@ -16,6 +16,8 @@ import {
   Italic,
   Quote,
   ListTodo,
+  List,
+  ListOrdered,
   Code,
   Feather,
 } from 'lucide-react';
@@ -55,6 +57,14 @@ function inlineMarkdownToHtml(text: string): string {
   return html;
 }
 
+function buildWebTaskHtml(itemHtml: string, isDone: boolean): string {
+  return `<div class="ve-task" data-task="true" data-checked="${
+    isDone ? 'true' : 'false'
+  }"><button type="button" contenteditable="false" class="ve-checkbox" tabindex="-1" aria-label="Toggle task"></button><span class="ve-task-text">${
+    itemHtml || '<br>'
+  }</span><span class="ve-task-actions" contenteditable="false"><button type="button" class="ve-move-btn ve-move-up" tabindex="-1" aria-label="Move task up">▲</button><button type="button" class="ve-move-btn ve-move-down" tabindex="-1" aria-label="Move task down">▼</button></span></div>`;
+}
+
 /**
  * Converts a full Markdown string into editable Visual DOM blocks.
  */
@@ -64,46 +74,73 @@ function markdownToVisualHtml(markdown: string): string {
   }
 
   const lines = markdown.split('\n');
-  return lines
-    .map((line) => {
-      // Checklist item: - [ ] or - [x]
-      const todoMatch = line.match(/^\s*[-*]\s+\[([ xX])\]\s*(.*)$/);
-      if (todoMatch) {
-        const isDone = todoMatch[1].toLowerCase() === 'x';
-        const itemHtml = inlineMarkdownToHtml(todoMatch[2]) || '<br>';
-        return `<div class="ve-task" data-task="true" data-checked="${
-          isDone ? 'true' : 'false'
-        }"><button type="button" contenteditable="false" class="ve-checkbox" tabindex="-1" aria-label="Toggle task"></button><span class="ve-task-text">${itemHtml}</span></div>`;
-      }
+  const out: string[] = [];
+  let listType: 'ul' | 'ol' | null = null;
+  let listItems: string[] = [];
 
-      // Headings
-      if (/^###\s+/.test(line)) {
-        const inner = inlineMarkdownToHtml(line.replace(/^###\s+/, '')) || '<br>';
-        return `<h3>${inner}</h3>`;
-      }
-      if (/^##\s+/.test(line)) {
-        const inner = inlineMarkdownToHtml(line.replace(/^##\s+/, '')) || '<br>';
-        return `<h2>${inner}</h2>`;
-      }
-      if (/^#\s+/.test(line)) {
-        const inner = inlineMarkdownToHtml(line.replace(/^#\s+/, '')) || '<br>';
-        return `<h1>${inner}</h1>`;
-      }
+  const flushList = () => {
+    if (!listType || listItems.length === 0) return;
+    out.push(`<${listType}>${listItems.map((item) => `<li>${item}</li>`).join('')}</${listType}>`);
+    listType = null;
+    listItems = [];
+  };
 
-      // Blockquote
-      if (/^>\s?/.test(line)) {
-        const inner = inlineMarkdownToHtml(line.replace(/^>\s?/, '')) || '<br>';
-        return `<blockquote>${inner}</blockquote>`;
-      }
+  for (const line of lines) {
+    // Checklist item: - [ ] or - [x]
+    const todoMatch = line.match(/^\s*[-*]\s+\[([ xX])\]\s*(.*)$/);
+    if (todoMatch) {
+      flushList();
+      const isDone = todoMatch[1].toLowerCase() === 'x';
+      out.push(buildWebTaskHtml(inlineMarkdownToHtml(todoMatch[2]), isDone));
+      continue;
+    }
 
-      // Empty line
-      if (!line.trim()) {
-        return '<p><br></p>';
+    // Bullet list item
+    const bulletMatch = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bulletMatch) {
+      if (listType !== 'ul') {
+        flushList();
+        listType = 'ul';
       }
+      listItems.push(inlineMarkdownToHtml(bulletMatch[1]) || '<br>');
+      continue;
+    }
 
-      return `<p>${inlineMarkdownToHtml(line)}</p>`;
-    })
-    .join('');
+    // Ordered list item
+    const orderedMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (orderedMatch) {
+      if (listType !== 'ol') {
+        flushList();
+        listType = 'ol';
+      }
+      listItems.push(inlineMarkdownToHtml(orderedMatch[1]) || '<br>');
+      continue;
+    }
+
+    flushList();
+
+    // Headings
+    if (/^###\s+/.test(line)) {
+      const inner = inlineMarkdownToHtml(line.replace(/^###\s+/, '')) || '<br>';
+      out.push(`<h3>${inner}</h3>`);
+    } else if (/^##\s+/.test(line)) {
+      const inner = inlineMarkdownToHtml(line.replace(/^##\s+/, '')) || '<br>';
+      out.push(`<h2>${inner}</h2>`);
+    } else if (/^#\s+/.test(line)) {
+      const inner = inlineMarkdownToHtml(line.replace(/^#\s+/, '')) || '<br>';
+      out.push(`<h1>${inner}</h1>`);
+    } else if (/^>\s?/.test(line)) {
+      const inner = inlineMarkdownToHtml(line.replace(/^>\s?/, '')) || '<br>';
+      out.push(`<blockquote>${inner}</blockquote>`);
+    } else if (!line.trim()) {
+      out.push('<p><br></p>');
+    } else {
+      out.push(`<p>${inlineMarkdownToHtml(line)}</p>`);
+    }
+  }
+
+  flushList();
+  return out.join('');
 }
 
 /**
@@ -118,7 +155,7 @@ function serializeInlineNodes(parent: Node): string {
     } else if (child.nodeType === Node.ELEMENT_NODE) {
       const el = child as HTMLElement;
       const tag = el.tagName.toUpperCase();
-      if (el.classList.contains('ve-checkbox')) {
+      if (el.classList.contains('ve-checkbox') || el.classList.contains('ve-task-actions') || el.classList.contains('ve-move-btn')) {
         return;
       }
       if (tag === 'BR') {
@@ -167,6 +204,21 @@ function visualDomToMarkdown(root: HTMLElement): string {
       return;
     }
 
+    if (tag === 'UL') {
+      el.querySelectorAll(':scope > li').forEach((li) => {
+        lines.push(`- ${serializeInlineNodes(li as HTMLElement)}`);
+      });
+      return;
+    }
+    if (tag === 'OL') {
+      let idx = 1;
+      el.querySelectorAll(':scope > li').forEach((li) => {
+        lines.push(`${idx}. ${serializeInlineNodes(li as HTMLElement)}`);
+        idx += 1;
+      });
+      return;
+    }
+
     if (tag === 'H1') {
       lines.push(`# ${serializeInlineNodes(el)}`);
       return;
@@ -212,6 +264,8 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
     italic: false,
     quote: false,
     checklist: false,
+    bullet: false,
+    ordered: false,
     code: false,
   });
 
@@ -302,6 +356,8 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
     let heading = false;
     let quote = false;
     let checklist = false;
+    let bullet = false;
+    let ordered = false;
     let code = false;
 
     let curr: Node | null = node;
@@ -311,6 +367,8 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
         const tag = el.tagName.toUpperCase();
         if (tag === 'H1' || tag === 'H2' || tag === 'H3') heading = true;
         if (tag === 'BLOCKQUOTE') quote = true;
+        if (tag === 'UL') bullet = true;
+        if (tag === 'OL') ordered = true;
         if (el.getAttribute('data-task') === 'true' || el.classList.contains('ve-task')) {
           checklist = true;
         }
@@ -328,7 +386,7 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
       // ignore
     }
 
-    setActiveFormats({ heading, bold, italic, quote, checklist, code });
+    setActiveFormats({ heading, bold, italic, quote, checklist, bullet, ordered, code });
   }, [showSyntax]);
 
   useEffect(() => {
@@ -528,8 +586,16 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
       textSpan.className = 've-task-text';
       textSpan.innerHTML = block && block.innerText.trim() ? block.innerHTML : '<br>';
 
+      const actionsSpan = document.createElement('span');
+      actionsSpan.className = 've-task-actions';
+      actionsSpan.contentEditable = 'false';
+      actionsSpan.innerHTML =
+        '<button type="button" class="ve-move-btn ve-move-up" tabindex="-1" aria-label="Move task up">▲</button>' +
+        '<button type="button" class="ve-move-btn ve-move-down" tabindex="-1" aria-label="Move task down">▼</button>';
+
       taskDiv.appendChild(checkbox);
       taskDiv.appendChild(textSpan);
+      taskDiv.appendChild(actionsSpan);
 
       if (block) {
         block.replaceWith(taskDiv);
@@ -604,7 +670,31 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
     syncVisualToState();
   };
 
-  // Handle checkbox clicks and keyboard ergonomics inside the Visual Editor
+  const handleFormatBullet = () => {
+    if (showSyntax) {
+      insertRawSnippet('- ', '', 'List item');
+      return;
+    }
+    if (!visualRef.current) return;
+    visualRef.current.focus();
+    document.execCommand('insertUnorderedList', false);
+    updateActiveFormats();
+    syncVisualToState();
+  };
+
+  const handleFormatOrdered = () => {
+    if (showSyntax) {
+      insertRawSnippet('1. ', '', 'List item');
+      return;
+    }
+    if (!visualRef.current) return;
+    visualRef.current.focus();
+    document.execCommand('insertOrderedList', false);
+    updateActiveFormats();
+    syncVisualToState();
+  };
+
+  // Handle checkbox clicks, task move buttons, and keyboard ergonomics inside the Visual Editor
   const handleVisualClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
     if (target.classList.contains('ve-checkbox')) {
@@ -613,6 +703,26 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
       if (taskRow) {
         const isChecked = taskRow.getAttribute('data-checked') === 'true';
         taskRow.setAttribute('data-checked', isChecked ? 'false' : 'true');
+        syncVisualToState();
+      }
+      return;
+    }
+
+    if (target.classList.contains('ve-move-up')) {
+      e.preventDefault();
+      const taskRow = target.closest('.ve-task');
+      if (taskRow && taskRow.previousElementSibling && visualRef.current) {
+        visualRef.current.insertBefore(taskRow, taskRow.previousElementSibling);
+        syncVisualToState();
+      }
+      return;
+    }
+
+    if (target.classList.contains('ve-move-down')) {
+      e.preventDefault();
+      const taskRow = target.closest('.ve-task');
+      if (taskRow && taskRow.nextElementSibling && visualRef.current) {
+        visualRef.current.insertBefore(taskRow.nextElementSibling, taskRow);
         syncVisualToState();
       }
     }
@@ -645,6 +755,25 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
         sel.removeAllRanges();
         sel.addRange(r);
         updateActiveFormats();
+        return;
+      }
+    }
+
+    if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      const block = getCurrentBlock();
+      if (block && (block.getAttribute('data-task') === 'true' || block.classList.contains('ve-task')) && visualRef.current) {
+        e.preventDefault();
+        if (e.key === 'ArrowUp' && block.previousElementSibling) {
+          visualRef.current.insertBefore(block, block.previousElementSibling);
+          const txt = block.querySelector('.ve-task-text') as HTMLElement | null;
+          if (txt) placeCaretAtEnd(txt);
+          syncVisualToState();
+        } else if (e.key === 'ArrowDown' && block.nextElementSibling) {
+          visualRef.current.insertBefore(block.nextElementSibling, block);
+          const txt = block.querySelector('.ve-task-text') as HTMLElement | null;
+          if (txt) placeCaretAtEnd(txt);
+          syncVisualToState();
+        }
         return;
       }
     }
@@ -682,8 +811,16 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
           textSpan.className = 've-task-text';
           textSpan.innerHTML = '<br>';
 
+          const actionsSpan = document.createElement('span');
+          actionsSpan.className = 've-task-actions';
+          actionsSpan.contentEditable = 'false';
+          actionsSpan.innerHTML =
+            '<button type="button" class="ve-move-btn ve-move-up" tabindex="-1" aria-label="Move task up">▲</button>' +
+            '<button type="button" class="ve-move-btn ve-move-down" tabindex="-1" aria-label="Move task down">▼</button>';
+
           nextTask.appendChild(checkbox);
           nextTask.appendChild(textSpan);
+          nextTask.appendChild(actionsSpan);
           block.after(nextTask);
           placeCaretAtEnd(textSpan);
         }
@@ -704,6 +841,62 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
         syncVisualToState();
         return;
       }
+    }
+  };
+
+  const handleSyntaxKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    const textarea = e.currentTarget;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    if (start !== end) return;
+
+    const before = content.slice(0, start);
+    const after = content.slice(end);
+    const lineStart = before.lastIndexOf('\n') + 1;
+    const currentLine = before.slice(lineStart);
+
+    const todoMatch = currentLine.match(/^(\s*)([-*]\s+\[[ xX]\]\s)(.*)$/);
+    const orderedMatch = currentLine.match(/^(\s*)(\d+)\.\s(.*)$/);
+    const bulletMatch = currentLine.match(/^(\s*)([-*]\s)(.*)$/);
+
+    let prefix: string | null = null;
+    let isEmptyItem = false;
+
+    if (todoMatch) {
+      isEmptyItem = !todoMatch[3].trim();
+      prefix = `${todoMatch[1]}- [ ] `;
+    } else if (orderedMatch) {
+      isEmptyItem = !orderedMatch[3].trim();
+      prefix = `${orderedMatch[1]}${parseInt(orderedMatch[2], 10) + 1}. `;
+    } else if (bulletMatch) {
+      isEmptyItem = !bulletMatch[3].trim();
+      prefix = `${bulletMatch[1]}${bulletMatch[2]}`;
+    }
+
+    if (prefix === null) return;
+    e.preventDefault();
+
+    if (isEmptyItem) {
+      const nextVal = before.slice(0, lineStart) + after;
+      handleContentChange(nextVal);
+      requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = lineStart;
+          textareaRef.current.selectionEnd = lineStart;
+        }
+      });
+    } else {
+      const insertion = `\n${prefix}`;
+      const nextVal = before + insertion + after;
+      handleContentChange(nextVal);
+      const nextPos = start + insertion.length;
+      requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          textareaRef.current.selectionStart = nextPos;
+          textareaRef.current.selectionEnd = nextPos;
+        }
+      });
     }
   };
 
@@ -950,6 +1143,9 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
           {/* Note Title */}
           <input
             type="text"
+            autoCapitalize="sentences"
+            autoCorrect="on"
+            spellCheck={true}
             className="font-inter text-xl sm:text-3xl font-semibold border-none outline-none text-on-surface bg-transparent w-full placeholder:text-on-surface-variant/30 tracking-tight"
             placeholder="Untitled note…"
             value={title}
@@ -1056,6 +1252,34 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
+              onClick={handleFormatBullet}
+              className={`shrink-0 inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 sm:px-2 sm:py-1 text-xs sm:text-[11px] font-medium transition-colors cursor-pointer ${
+                !showSyntax && activeFormats.bullet
+                  ? 'bg-on-surface text-surface'
+                  : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
+              }`}
+              title="Bullet List"
+            >
+              <List size={13} />
+              <span>List</span>
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleFormatOrdered}
+              className={`shrink-0 inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 sm:px-2 sm:py-1 text-xs sm:text-[11px] font-medium transition-colors cursor-pointer ${
+                !showSyntax && activeFormats.ordered
+                  ? 'bg-on-surface text-surface'
+                  : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
+              }`}
+              title="Numbered List"
+            >
+              <ListOrdered size={13} />
+              <span>Numbered</span>
+            </button>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={handleFormatCode}
               className={`shrink-0 inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 sm:px-2 sm:py-1 text-xs sm:text-[11px] font-medium transition-colors cursor-pointer ${
                 !showSyntax && activeFormats.code
@@ -1075,6 +1299,9 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
               ref={visualRef}
               contentEditable
               suppressContentEditableWarning
+              spellCheck={true}
+              autoCapitalize="sentences"
+              autoCorrect="on"
               data-placeholder="Start writing… Click Bold, Code, Heading, or Checklist above to format without Markdown symbols."
               data-empty={!content.trim() ? 'true' : 'false'}
               onInput={syncVisualToState}
@@ -1086,10 +1313,14 @@ const Editor: React.FC<EditorProps> = ({ note, onSave, onDelete, onBack, onNewNo
           ) : (
             <textarea
               ref={textareaRef}
+              spellCheck={true}
+              autoCapitalize="sentences"
+              autoCorrect="on"
               className="flex-1 border-none outline-none resize-none w-full bg-transparent text-on-surface text-sm sm:text-[0.9375rem] font-mono leading-[1.8] placeholder:text-on-surface-variant/35"
               placeholder="Raw Markdown syntax mode (**bold**, `code`, ## Heading)…"
               value={content}
               onChange={(e) => handleContentChange(e.target.value)}
+              onKeyDown={handleSyntaxKeyDown}
             />
           )}
         </div>

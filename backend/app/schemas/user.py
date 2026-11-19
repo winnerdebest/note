@@ -30,3 +30,18 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     user_id: str | None = None
+
+
+class EncryptionKeyBundle(BaseModel):
+    encryption_salt: str | None = None
+    encryption_verifier: str | None = None
+    wrapped_dek: str | None = None
+    recovery_wrapped_dek: str | None = None
+    e2ee_enabled: bool = False
+
+
+class EncryptionKeyUpdate(BaseModel):
+    encryption_salt: str
+    encryption_verifier: str
+    wrapped_dek: str
+    recovery_wrapped_dek: str | None = None
